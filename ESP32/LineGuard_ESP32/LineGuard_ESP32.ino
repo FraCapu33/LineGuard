@@ -1,4 +1,4 @@
-// === LineGuard (Configurazione Avanzata NVS, Web, Email, NeoPixel, OTA - v5) ===
+// === LineGuard (Configurazione Avanzata NVS, Web, Email, NeoPixel, OTA - v6 SD Retry) ===
 
 #include <WiFi.h>
 #include <ETH.h>
@@ -21,44 +21,26 @@
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <WiFiClientSecure.h>
-#include <ArduinoJson.h> // Assicurati di aver installato questa libreria
+#include <ArduinoJson.h>
 
 // --- VERSIONE FIRMWARE CORRENTE ---
-// !!! IMPORTANTE: Aggiorna questa versione ogni volta che compili un nuovo firmware per OTA !!!
-#define FIRMWARE_VERSION "0.9.0" // Esempio di versione iniziale
+#define FIRMWARE_VERSION "0.9.1" 
 
 // --- CONFIGURAZIONE OTA GITHUB ---
 const char* GITHUB_REPO_OWNER = "FraCapu33";
 const char* GITHUB_REPO_NAME = "LineGuard";
-// Il nome del file .bin che caricherai come asset nelle release di GitHub
-const char* FIRMWARE_ASSET_NAME = "LineGuard.bin"; // Assicurati che corrisponda!
-
-// URL per l'API di GitHub per ottenere la "latest release"
+const char* FIRMWARE_ASSET_NAME = "LineGuard.bin";
 String GITHUB_API_LATEST_RELEASE_URL = "https://api.github.com/repos/" + String(GITHUB_REPO_OWNER) + "/" + String(GITHUB_REPO_NAME) + "/releases/latest";
 
-// Certificato Root CA per api.github.com (necessario per HTTPS con WiFiClientSecure)
-// Ottenuto da: openssl s_client -showcerts -connect api.github.com:443 < /dev/null
-// È una buona pratica includerlo, anche se versioni recenti del core ESP32 potrebbero averlo.
-// Se l'aggiornamento fallisce per SSL, questo potrebbe essere il motivo.
-// Puoi trovarne uno aggiornato cercando "GitHub API root CA certificate" o usare quello di DigiCert.
-// Per semplicità e dato che HTTPUpdate potrebbe gestirlo, lo lascio commentato per ora.
-// Se necessario, decommenta e popola.
-// const char* github_api_ca_cert = \
-// "-----BEGIN CERTIFICATE-----\n" \
-// "MIIDxTCCAq2gAwIBAgIQAqxcJmoLQJuPC3nyrkYldzANBgkqhkiG9w0BAQUFADBs\n" \
-// // ... (Certificato Completo) ...
-// "-----END CERTIFICATE-----\n";
-
-
-// --- Definizione LED RGB NeoPixel (per Waveshare ESP32-S3-ETH) ---
+// --- Definizione LED RGB NeoPixel ---
 #define NEOPIXEL_PIN 48
 #define NUM_NEOPIXELS 1
 Adafruit_NeoPixel rgbLed(NUM_NEOPIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
-// --- Oggetto Preferences per NVS ---
+// --- Oggetto Preferences ---
 Preferences preferences;
 
-// --- Variabili di Configurazione (caricate da NVS o default) ---
+// --- Variabili di Configurazione ---
 String nomeDispositivo;
 String conf_ssid;
 String conf_password;
@@ -107,7 +89,7 @@ bool timeSynced = false;
 bool sdCardInitialized = false;
 volatile unsigned long logCount = 0;
 bool emailAlertSentForSDFailure = false;
-String ota_status_message = ""; // Per messaggi OTA sulla pagina web
+String ota_status_message = "";
 
 std::vector<int> monitoredPinsVec;
 std::vector<int> lastPinStatesVec;
@@ -129,6 +111,15 @@ const float SPEED_CHANGE_THRESHOLD = 0.1f;
 
 SMTPSession smtp;
 
+// --- Variabili per Retry SD ---
+int sdRetryCount = 0;
+const int MAX_SD_RETRIES = 5;
+unsigned long nextSDRetryTime = 0;
+const unsigned long SD_RETRY_INTERVAL = 1000; // 1 secondo
+bool sdRecoveryAttemptInProgress = false;
+String lastSDFailureContext = "";
+
+
 // ISR per sensore velocità
 void IRAM_ATTR handleSpeedPulse() { speedPulseCount++; }
 
@@ -137,6 +128,21 @@ void generateRandomDeviceName(char* nameBuffer, size_t bufferSize) {
   long randomNumber = random(10000, 100000);
   snprintf(nameBuffer, bufferSize, "LineGuard%ld", randomNumber);
 }
+
+void triggerSDRecovery(const String& context) {
+    if (!sdRecoveryAttemptInProgress) { // Avvia solo se non già in corso
+        Serial.println("[SD Error] Rilevato problema SD: " + context + ". Avvio tentativi di recupero.");
+        sdCardInitialized = false; // Marcala come non inizializzata
+        emailAlertSentForSDFailure = false; // Permetti un nuovo invio email se il recupero fallisce
+        sdRecoveryAttemptInProgress = true;
+        sdRetryCount = 0;
+        nextSDRetryTime = millis(); // Inizia il primo tentativo nel prossimo ciclo di loop idoneo
+        lastSDFailureContext = context;
+    } else {
+        Serial.println("[SD Error] Rilevato problema SD: " + context + ", ma recupero già in corso.");
+    }
+}
+
 
 // Funzione per parsare CSV dei pin
 void parseMonitoredPins(const String& csv) {
@@ -217,9 +223,8 @@ void printStatusToSerial() {
   Serial.println(F("\n\n--- LineGuard Status (via Seriale) ---"));
   Serial.println(F("Informazioni Dispositivo:"));
   Serial.print(F("  Nome Dispositivo: ")); Serial.println(nomeDispositivo);
-  Serial.print(F("  Versione Firmware: ")); Serial.println(FIRMWARE_VERSION); // <<< Aggiunta versione firmware
+  Serial.print(F("  Versione Firmware: ")); Serial.println(FIRMWARE_VERSION);
   Serial.print(F("  Hostname (mDNS): ")); Serial.print(nomeDispositivo); Serial.println(F(".local"));
-  // ... (resto della funzione come prima) ...
   Serial.println(F("\nStato della Rete:"));
   Serial.print(F("  Ethernet: ")); Serial.println(ethernetConnected ? F("Connesso") : F("Disconnesso"));
   if (ethernetConnected) { Serial.print(F("  Ethernet IP: ")); Serial.println(ETH.localIP().toString()); }
@@ -242,10 +247,10 @@ void printStatusToSerial() {
   Serial.print(F("Pin Sensore Velocità: ")); Serial.println(active_speed_sensor_pin); Serial.print(F("Metri/Impulso: ")); Serial.println(active_meters_per_pulse, 5);
   uint32_t heapFree = ESP.getFreeHeap(); uint32_t heapTotal = ESP.getHeapSize();
   Serial.println(F("\nMemoria:")); Serial.print(F("  Heap Libera: ")); Serial.print(heapFree / 1024); Serial.println(F(" KB")); Serial.print(F("  Heap Totale: ")); Serial.print(heapTotal / 1024); Serial.println(F(" KB"));
-  Serial.println(F("\nScheda SD:")); Serial.print(F("  Inizializzata: ")); Serial.println(sdCardInitialized ? F("Si") : F("No"));
+  Serial.println(F("\nScheda SD:")); Serial.print(F("  Inizializzata: ")); Serial.println(sdCardInitialized ? F("Si") : (sdRecoveryAttemptInProgress ? F("Recupero in corso...") : F("No")));
   if (sdCardInitialized) { uint64_t csMB=SD.cardSize()/(1024*1024); uint64_t tbS=SD.totalBytes(); uint64_t ubS=SD.usedBytes(); uint64_t cuMB=ubS/(1024*1024); uint64_t cfMB=(tbS-ubS)/(1024*1024);
     Serial.print(F("  Dimensione: ")); Serial.print(csMB); Serial.println(F(" MB")); Serial.print(F("  Usata: ")); Serial.print(cuMB); Serial.println(F(" MB")); Serial.print(F("  Libera: ")); Serial.print(cfMB); Serial.println(F(" MB")); Serial.print(F("  Log scritti: ")); Serial.println(logCount); }
-  else { Serial.println(F("  Scheda SD non disponibile.")); }
+  else if (!sdRecoveryAttemptInProgress) { Serial.println(F("  Scheda SD non disponibile.")); }
   Serial.println(F("\nVelocità di Produzione:")); Serial.print(F("  Metri/minuto: ")); Serial.println(currentSpeedMetersPerMinute, 2);
   Serial.println(F("--- Fine Stato LineGuard ---"));
 }
@@ -256,8 +261,8 @@ void sendSDFailureEmail(const String& errorMessage) {
     Serial.println("[Email] Impossibile inviare email: nessuna connessione di rete.");
     return;
   }
-  if (emailAlertSentForSDFailure) {
-    Serial.println("[Email] Email di errore SD già inviata in questa sessione.");
+  if (emailAlertSentForSDFailure) { // Modificato: Non inviare se già fatto per questa sessione di fallimento
+    Serial.println("[Email] Email di errore SD già inviata per questo evento di fallimento.");
     return;
   }
   if (conf_email_sender.length() == 0 || conf_email_recipient_to.length() == 0 || conf_email_smtp_server.length() == 0) {
@@ -265,32 +270,31 @@ void sendSDFailureEmail(const String& errorMessage) {
     return;
   }
 
-  Serial.println("[Email] Tentativo di invio email per errore SD...");
+  Serial.println("[Email] Tentativo di invio email per errore SD: " + errorMessage);
 
-  ESP_Mail_Session session_obj; // Rinominato per evitare conflitto con variabile globale smtp
+  ESP_Mail_Session session_obj; 
   session_obj.server.host_name = conf_email_smtp_server.c_str();
   session_obj.server.port = conf_email_smtp_port;
   session_obj.login.email = conf_email_sender.c_str();
   session_obj.login.password = conf_email_sender_password.c_str();
   session_obj.login.user_domain = "";
-
   session_obj.time.gmt_offset = 1;
   session_obj.time.day_light_offset = 1;
   
   SMTP_Message message;
   message.sender.name = nomeDispositivo;
   message.sender.email = conf_email_sender.c_str();
-  message.subject = "AVVISO: Errore SD Card su Dispositivo " + nomeDispositivo;
+  message.subject = "AVVISO: Problema Scheda SD su Dispositivo " + nomeDispositivo;
   
-  String htmlMsg = "<h2>Allarme Errore Scheda SD</h2>";
+  String htmlMsg = "<h2>Allarme Problema Scheda SD</h2>";
   htmlMsg += "<p>Il dispositivo <b>" + nomeDispositivo + "</b> ha riscontrato un problema con la scheda SD.</p>";
   htmlMsg += "<p><b>Dettaglio Problema:</b> " + errorMessage + "</p>";
-  htmlMsg += "<p><b>Ora Rilevamento (circa):</b> " + getFormattedTimestamp() + "</p>";
+  htmlMsg += "<p><b>Ora Rilevamento:</b> " + getFormattedTimestamp() + "</p>";
+  htmlMsg += "<p>Dopo " + String(MAX_SD_RETRIES) + " tentativi di recupero, il problema persiste.</p>";
   htmlMsg += "<p>Si prega di verificare lo stato del dispositivo e della scheda SD.</p>";
   message.html.content = htmlMsg;
   message.html.charSet = "utf-8";
   message.html.transfer_encoding = Content_Transfer_Encoding::enc_qp;
-
   message.addRecipient(conf_email_recipient_to, conf_email_recipient_to.c_str());
 
   if (conf_email_recipient_cc_csv.length() > 0) {
@@ -309,26 +313,27 @@ void sendSDFailureEmail(const String& errorMessage) {
     }
   }
   
-  smtp.debug(1); // Usa l'oggetto smtp globale
+  smtp.debug(0); // Meno verboso di default, impostare a 1 per debug SMTP
 
   Serial.println("[Email] Connessione al server SMTP...");
-  if (!smtp.connect(&session_obj)) { // Passa session_obj
+  if (!smtp.connect(&session_obj)) { 
     Serial.printf("[Email] Connessione SMTP fallita: %s\n", smtp.errorReason().c_str());
-    return;
+    return; // Non impostare emailAlertSentForSDFailure se la connessione fallisce
   }
 
   Serial.println("[Email] Invio del messaggio...");
-  if (!MailClient.sendMail(&smtp, &message)) { // Usa smtp globale
+  if (!MailClient.sendMail(&smtp, &message)) {
     Serial.printf("[Email] Invio email fallito: %s\n", smtp.errorReason().c_str());
+    // Non impostare emailAlertSentForSDFailure se l'invio fallisce, per permettere ritentativi
   } else {
     Serial.println("[Email] Email inviata con successo!");
-    emailAlertSentForSDFailure = true;
+    emailAlertSentForSDFailure = true; // Imposta solo se l'email è stata inviata con successo
   }
-  if(smtp.connected()) smtp.closeSession(); // Usa smtp globale
+  if(smtp.connected()) smtp.closeSession();
 }
 
-
 // === Gestione Eventi Wi-Fi ed Ethernet ===
+// ... (codice invariato) ...
 void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
   Serial.printf("[WiFiEvent] event: %d\n", event);
   switch (event) {
@@ -356,6 +361,7 @@ void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
 }
 
 // === Funzioni di Rete Ausiliarie ===
+// ... (codice invariato) ...
 void startWiFi() {
   if (ethernetConnected || wifiConnected || attemptingWiFiConnection) return;
   if (millis() - lastWiFiAttemptTime < wifiRetryDelay && lastWiFiAttemptTime != 0) return;
@@ -376,49 +382,42 @@ void syncTime() {
     Serial.println("[Time] Attempting to sync time with NTP server...");
     configTzTime("CET-1CEST,M3.5.0/2,M10.5.0/3", "pool.ntp.org", "time.nist.gov");
     struct tm timeinfo; int retries = 0; const int maxRetries = 20;
-    while(!getLocalTime(&timeinfo, 0) && retries < maxRetries) { if(timeinfo.tm_year > (2000-1900)) break; Serial.print("."); delay(500); retries++; }
+    while(!getLocalTime(&timeinfo, 0) && retries < maxRetries) { if(timeinfo.tm_year > (2000-1900)) break; Serial.print("."); delay(50); retries++; } // Shortened delay during NTP
     if (timeinfo.tm_year > (2000 - 1900)) { Serial.println("\n[Time] Time synchronized successfully!"); Serial.printf("[Time] Current time: %s\n", getFormattedTimestamp().c_str()); timeSynced = true; }
     else { Serial.println("\n[Time][Error] Failed to synchronize time via NTP after retries."); timeSynced = false; }
   }
 }
 
 // --- FUNZIONI OTA ---
+// ... (codice invariato) ...
 void performUpdate(String firmware_url, String new_version) {
     ota_status_message = "Avvio aggiornamento alla versione " + new_version + " da: " + firmware_url + "<br>Attendere il riavvio del dispositivo...";
     Serial.println(ota_status_message);
     
-    // Mostra un messaggio sulla pagina di aggiornamento prima di iniziare
-    String html = "<html><head><title>Aggiornamento Firmware</title><meta http-equiv='refresh' content='10;url=/status'></head>"; // Refresh verso status dopo un po'
+    String html = "<html><head><title>Aggiornamento Firmware</title><meta http-equiv='refresh' content='10;url=/status'></head>"; 
     html += "<body><h1>Aggiornamento Firmware</h1><p>" + ota_status_message + "</p>";
     html += "<p>Il dispositivo si riavvier&agrave; automaticamente se l'aggiornamento ha successo.</p>";
     html += "<p><a href='/status'>Torna allo stato (dopo il riavvio)</a></p></body></html>";
     server.send(200, "text/html", html);
-    delay(100); // Lascia il tempo al browser di ricevere la pagina
+    delay(100); 
 
     WiFiClientSecure clientSecure;
-    // Per GitHub, potrebbe essere necessario impostare il certificato root o fidarsi ciecamente (non sicuro)
-    // clientSecure.setCACert(github_api_ca_cert); // Se si usa un certificato globale
-    clientSecure.setInsecure(); // SOLO PER TEST - NON RACCOMANDATO PER PRODUZIONE! Rimuovere o usare setCACert per produzione.
-                                // Per GitHub, la libreria HTTPUpdate con core ESP32 recenti spesso gestisce bene HTTPS.
+    clientSecure.setInsecure(); 
 
-    // t_httpUpdate_return ret = httpUpdate.update(firmware_url); // Metodo più vecchio
     t_httpUpdate_return ret = httpUpdate.update(clientSecure, firmware_url);
-
 
     switch (ret) {
         case HTTP_UPDATE_FAILED:
             ota_status_message = "Errore aggiornamento: " + httpUpdate.getLastErrorString();
             Serial.printf("[OTA] Update failed: Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
-            // Non inviare una nuova pagina qui perché il server potrebbe essere instabile o il client disconnesso
             break;
         case HTTP_UPDATE_NO_UPDATES:
-            ota_status_message = "Nessun aggiornamento necessario."; // Non dovrebbe accadere se abbiamo già verificato la versione
+            ota_status_message = "Nessun aggiornamento necessario."; 
             Serial.println("[OTA] No updates needed.");
             break;
         case HTTP_UPDATE_OK:
             ota_status_message = "Aggiornamento completato con successo! Riavvio...";
             Serial.println("[OTA] Update OK! Rebooting...");
-            // Il riavvio è gestito da httpUpdate.update
             break;
         default:
             ota_status_message = "Risultato aggiornamento sconosciuto.";
@@ -436,21 +435,20 @@ void handleFirmwareUpdate() {
 
     ota_status_message = "Controllo aggiornamenti da GitHub...";
     server.send(200, "text/html", "<html><head><title>Aggiornamento Firmware</title><meta http-equiv='refresh' content='5;url=/otastatus'></head><body><h1>Aggiornamento Firmware</h1><p>" + ota_status_message + "</p><p>Verrai reindirizzato tra poco...</p></body></html>");
-    delay(100); // Piccolo delay per permettere l'invio della pagina
+    delay(100); 
 
     HTTPClient http;
-    WiFiClientSecure clientSecureCheck; // Client separato per API check
-    // clientSecureCheck.setCACert(github_api_ca_cert); // Se necessario
-    clientSecureCheck.setInsecure(); // SOLO PER TEST - NON RACCOMANDATO PER PRODUZIONE!
+    WiFiClientSecure clientSecureCheck; 
+    clientSecureCheck.setInsecure(); 
 
     Serial.println("[OTA] Controllo URL: " + GITHUB_API_LATEST_RELEASE_URL);
     if (http.begin(clientSecureCheck, GITHUB_API_LATEST_RELEASE_URL)) {
         int httpCode = http.GET();
         if (httpCode == HTTP_CODE_OK) {
             String payload = http.getString();
-            Serial.println("[OTA] Risposta API GitHub: " + payload);
+            Serial.println("[OTA] Risposta API GitHub: " + payload.substring(0, min(500, (int)payload.length())) + "..."); // Logga solo una parte
 
-            DynamicJsonDocument doc(2048); // Aumenta se la risposta JSON è più grande
+            DynamicJsonDocument doc(2048); 
             DeserializationError error = deserializeJson(doc, payload);
 
             if (error) {
@@ -468,7 +466,6 @@ void handleFirmwareUpdate() {
                 return;
             }
             String remote_version = String(remote_version_tag);
-            // Rimuovi una eventuale 'v' iniziale dal tag per confronto (es. v1.0.0 -> 1.0.0)
             if (remote_version.startsWith("v")) {
                 remote_version.remove(0, 1);
             }
@@ -489,7 +486,7 @@ void handleFirmwareUpdate() {
                     const char* asset_name_ptr = asset["name"];
                     if (asset_name_ptr) {
                         String asset_name = String(asset_name_ptr);
-                        if (asset_name.equalsIgnoreCase(FIRMWARE_ASSET_NAME) || asset_name.endsWith(".bin")) { // Cerca per nome specifico o per estensione .bin
+                        if (asset_name.equalsIgnoreCase(FIRMWARE_ASSET_NAME) || asset_name.endsWith(".bin")) { 
                             firmware_url = asset["browser_download_url"].as<String>();
                             ota_status_message += "Trovato asset: " + asset_name + " @ " + firmware_url + "<br>";
                             Serial.println("[OTA] Trovato firmware asset: " + asset_name + " URL: " + firmware_url);
@@ -499,11 +496,8 @@ void handleFirmwareUpdate() {
                 }
 
                 if (firmware_url != "") {
-                    // Chiamata non bloccante per l'update, la pagina /otastatus mostrerà l'avanzamento
-                    // Qui inviamo solo il messaggio che l'aggiornamento sta per iniziare
                     ota_status_message += "Download e installazione aggiornamento avviati...<br>";
-                    performUpdate(firmware_url, remote_version); // Questa funzione invierà la sua pagina e poi aggiornerà
-                    // Non fare altro qui, performUpdate gestirà la risposta e il riavvio.
+                    performUpdate(firmware_url, remote_version); 
                 } else {
                     ota_status_message += "Errore: File firmware (" + String(FIRMWARE_ASSET_NAME) + " o *.bin) non trovato negli asset della release.<br>Assicurati che sia caricato correttamente su GitHub.";
                     Serial.println("[OTA] Firmware asset non trovato.");
@@ -525,7 +519,6 @@ void handleFirmwareUpdate() {
 
 void handleOTAStatusPage() {
     String html = "<html><head><title>Stato Aggiornamento Firmware</title>";
-    // Non fare auto-refresh se l'aggiornamento è in corso e si riavvierà
     if (!ota_status_message.startsWith("Avvio aggiornamento")) {
          html += "<meta http-equiv='refresh' content='7;url=/status'>";
     }
@@ -534,16 +527,11 @@ void handleOTAStatusPage() {
     html += "<p><a href='/status'>Torna alla pagina di Stato</a></p>";
     html += "</body></html>";
     server.send(200, "text/html", html);
-    // Resetta il messaggio se non è un errore grave o un successo che porta al riavvio
-    if (ota_status_message.endsWith("aggiornato.") || ota_status_message.startsWith("Errore parsing") || ota_status_message.startsWith("Errore HTTP") || ota_status_message.startsWith("Impossibile connettersi") || ota_status_message.startsWith("Errore: 'tag_name'") || ota_status_message.startsWith("Errore: File firmware")) {
-        // ota_status_message = ""; // Commentato per lasciare l'ultimo messaggio visibile finché l'utente non naviga altrove
-    }
 }
 
 
 // === Web Server ===
-
-// Handler per la funzione "Identifica" (lampeggio LED NeoPixel)
+// ... (codice handleIdentify, handleConfigPage, handleSaveConfig invariato) ...
 void handleIdentify() {
   Serial.println("[WebServer] Ricevuta richiesta /identifica");
   uint32_t identifyColor = rgbLed.Color(0, 0, 255); // Blu per l'identificazione
@@ -662,42 +650,80 @@ void startServer() {
   server.on("/saveconfig", HTTP_POST, handleSaveConfig);
   server.on("/identifica", HTTP_GET, handleIdentify);
   
-  // --- ROUTE PER OTA ---
   server.on("/doupdate", HTTP_GET, handleFirmwareUpdate);
-  server.on("/otastatus", HTTP_GET, handleOTAStatusPage); // Pagina per visualizzare lo stato dell'OTA
+  server.on("/otastatus", HTTP_GET, handleOTAStatusPage); 
 
-  server.on("/log", HTTP_GET, []() { // ... (codice log esistente) ...
-    if (!sdCardInitialized) { server.send(503, "text/plain", "SD not init."); return; }
+  server.on("/log", HTTP_GET, []() { 
+    if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card non disponibile."); return; }
+    if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
+    // ... (resto del codice log)
     if (SD.exists("/log_temp.csv")) SD.remove("/log_temp.csv"); File oF = SD.open("/log.csv", FILE_READ);
-    if (!oF) { server.send(500, "text/plain", "Err open /log.csv"); return; } File tF = SD.open("/log_temp.csv", FILE_WRITE);
-    if (!tF) { oF.close(); server.send(500, "text/plain", "Err open /log_temp.csv"); return; }
-    uint8_t b[512]; size_t br; while ((br=oF.read(b,sizeof(b))) > 0) { tF.write(b,br); } oF.close(); tF.close();
-    if (!SD.remove("/log.csv")) Serial.println("Err remove /log.csv"); File nLF = SD.open("/log.csv", FILE_WRITE);
-    if (nLF) { nLF.println("Dispositivo,Timestamp,Tipo,Descrizione,Valore"); nLF.close(); } else { server.send(500,"text/plain","Err recreate /log.csv"); return;}
-    File fTS = SD.open("/log_temp.csv", FILE_READ);
+    if (!oF) { server.send(500, "text/plain", "Err open /log.csv"); triggerSDRecovery("Errore apertura /log.csv per download"); return; } 
+    File tF = SD.open("/log_temp.csv", FILE_WRITE);
+    if (!tF) { oF.close(); server.send(500, "text/plain", "Err open /log_temp.csv"); triggerSDRecovery("Errore apertura /log_temp.csv per scrittura"); return; }
+    uint8_t b[512]; size_t br; 
+    while ((br=oF.read(b,sizeof(b))) > 0) { 
+        if (tF.write(b,br) != br) {
+            oF.close(); tF.close(); SD.remove("/log_temp.csv"); 
+            server.send(500, "text/plain", "Err write /log_temp.csv"); 
+            triggerSDRecovery("Errore scrittura /log_temp.csv durante copia"); return;
+        }
+    } 
+    oF.close(); tF.close(); 
+    if (!SD.remove("/log.csv")) {Serial.println("Err remove /log.csv"); /* Non critico per il download, ma logga */}
+    File nLF = SD.open("/log.csv", FILE_WRITE);
+    if (nLF) { 
+        if (!nLF.println("Dispositivo,Timestamp,Tipo,Descrizione,Valore")) {
+             nLF.close(); triggerSDRecovery("Errore scrittura header nuovo /log.csv");
+             server.send(500,"text/plain","Err write new /log.csv header"); return;
+        }
+        nLF.close(); 
+    } else { 
+        server.send(500,"text/plain","Err recreate /log.csv"); 
+        triggerSDRecovery("Errore ricreazione /log.csv"); return;
+    }
+    File fTS = SD.open("/log_temp.csv", FILE_READ); 
     if (fTS) { server.sendHeader("Content-Disposition", "attachment; filename=\"log_download.csv\""); server.streamFile(fTS,"text/csv"); fTS.close();}
     else server.send(404,"text/plain","log_temp.csv not found");
   });
-  server.on("/logtemp", HTTP_GET, []() { // ... (codice logtemp esistente) ...
-    if (!sdCardInitialized) { server.send(503,"text/plain","SD not init."); return; }
+  server.on("/logtemp", HTTP_GET, []() {
+    if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503,"text/plain","SD Card non disponibile."); return; }
+    if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
     if (!SD.exists("/log_temp.csv")) { server.send(404,"text/plain","/log_temp.csv not found."); return; }
-    File f=SD.open("/log_temp.csv",FILE_READ); if(!f){server.send(500,"text/plain","Err open /log_temp.csv");return;}
+    File f=SD.open("/log_temp.csv",FILE_READ); 
+    if(!f){server.send(500,"text/plain","Err open /log_temp.csv"); triggerSDRecovery("Errore apertura /log_temp.csv per /logtemp"); return;}
     server.sendHeader("Content-Disposition","attachment; filename=\"log_temp.csv\""); server.streamFile(f,"text/csv"); f.close();
   });
-  server.on("/del", HTTP_GET, []() { // ... (codice del esistente) ...
-    if (!sdCardInitialized) { server.send(503,"text/plain","SD not init."); return; }
-    if(SD.exists("/log_temp.csv")){ if(SD.remove("/log_temp.csv")) server.send(200,"text/plain","log_temp.csv deleted."); else server.send(500,"text/plain","Err deleting log_temp.csv");}
+  server.on("/del", HTTP_GET, []() { 
+    if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503,"text/plain","SD Card non disponibile."); return; }
+    if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
+    if(SD.exists("/log_temp.csv")){ 
+        if(SD.remove("/log_temp.csv")) server.send(200,"text/plain","log_temp.csv deleted."); 
+        else {
+            server.send(500,"text/plain","Err deleting log_temp.csv"); 
+            triggerSDRecovery("Errore cancellazione /log_temp.csv");
+        }
+    }
     else server.send(404,"text/plain","No temp log to delete.");
   });
   server.on("/status", HTTP_GET, []() {
     uint32_t hF=ESP.getFreeHeap(); uint32_t hT=ESP.getHeapSize(); uint64_t csMB=0,cuMB=0,cfMB=0;
-    if(sdCardInitialized){csMB=SD.cardSize()/(1024*1024);uint64_t tb=SD.totalBytes();uint64_t ub=SD.usedBytes();cuMB=ub/(1024*1024);cfMB=(tb-ub)/(1024*1024);}
-    String sP="<html><head><title>Status "+nomeDispositivo+"</title><meta http-equiv='refresh' content='15'><style>body{font-family:Arial,sans-serif;margin:15px;}h1{color:#333;}ul{list-style-type:none;padding:0;}li{background-color:#f9f9f9;border:1px solid #ddd;margin-bottom:8px;padding:10px;border-radius:4px;}li strong{color:#555;} .ota-button{padding:8px 12px;background-color:#007bff;color:white;text-decoration:none;border-radius:4px;border:none;cursor:pointer;font-size:0.9em;margin-left:10px;} .ota-button:hover{background-color:#0056b3;}</style></head><body><h1>Status Dispositivo</h1>";
-    sP += "<p style='margin-bottom:15px;'><a href='/doupdate' class='ota-button'>Verifica/Installa Aggiornamenti Firmware</a></p>"; // Pulsante Aggiorna Firmware
+    String sdStatusString = "";
+    if (sdCardInitialized) {
+        csMB=SD.cardSize()/(1024*1024);uint64_t tb=SD.totalBytes();uint64_t ub=SD.usedBytes();cuMB=ub/(1024*1024);cfMB=(tb-ub)/(1024*1024);
+        sdStatusString = "Inizializzata | Dim: "+String(csMB)+"MB | Usata: "+String(cuMB)+"MB | Libera: "+String(cfMB)+"MB | Logs: "+String(logCount);
+    } else if (sdRecoveryAttemptInProgress) {
+        sdStatusString = "Recupero in corso (tentativo " + String(sdRetryCount+1) + "/" + String(MAX_SD_RETRIES) + ")...";
+    } else {
+        sdStatusString = "Non Inizializzata / Errore";
+    }
+
+    String sP="<html><head><title>Status "+nomeDispositivo+"</title><meta http-equiv='refresh' content='10'><style>body{font-family:Arial,sans-serif;margin:15px;}h1{color:#333;}ul{list-style-type:none;padding:0;}li{background-color:#f9f9f9;border:1px solid #ddd;margin-bottom:8px;padding:10px;border-radius:4px;}li strong{color:#555;} .ota-button{padding:8px 12px;background-color:#007bff;color:white;text-decoration:none;border-radius:4px;border:none;cursor:pointer;font-size:0.9em;margin-left:10px;} .ota-button:hover{background-color:#0056b3;}</style></head><body><h1>Status Dispositivo</h1>";
+    sP += "<p style='margin-bottom:15px;'><a href='/doupdate' class='ota-button'>Verifica/Installa Aggiornamenti Firmware</a></p>"; 
     sP += "<ul>";
     sP+="<li><strong>Dispositivo:</strong> "+nomeDispositivo+" (<a href='/config'>Configura</a>)";
     sP+=" <form action='/identifica' method='get' style='display:inline; margin-left:15px;'><input type='submit' value='Identifica Dispositivo' style='padding: 5px 10px; background-color: #ffc107; color: black; border: 1px solid #d39e00; border-radius: 4px; cursor: pointer; font-size:0.9em;'></form></li>";
-    sP+="<li><strong>Versione Firmware:</strong> " + String(FIRMWARE_VERSION) + "</li>"; // Mostra versione firmware
+    sP+="<li><strong>Versione Firmware:</strong> " + String(FIRMWARE_VERSION) + "</li>"; 
     sP+="<li><strong>Hostname:</strong> "+nomeDispositivo+".local</li>";
     sP+="<li><strong>Ethernet:</strong> "+String(ethernetConnected?"Connesso":"Disconnesso")+(ethernetConnected?(" @ "+ETH.localIP().toString()):"")+"</li>";
     sP+="<li><strong>Wi-Fi:</strong> "+String(wifiConnected?("Connesso ("+WiFi.SSID()+") @ "+WiFi.localIP().toString()):(attemptingWiFiConnection?("Connessione a "+conf_ssid+"..."):"Disconnesso"))+"</li>";
@@ -708,30 +734,58 @@ void startServer() {
     sP+="<li><strong>Pin Monitorati (CSV):</strong> "+conf_monitored_pins_csv+"</li><li><strong>Pin Sensore Velocità:</strong> "+String(active_speed_sensor_pin)+" | <strong>Metri/Impulso:</strong> "+String(active_meters_per_pulse,5)+"</li>";
     sP+="<li><strong>Velocità Attuale:</strong> "+String(currentSpeedMetersPerMinute,2)+" m/min</li>";
     sP+="<li><strong>Memoria Heap:</strong> Libera "+String(hF/1024)+"KB / Totale "+String(hT/1024)+"KB</li>";
-    sP+="<li><strong>Scheda SD:</strong> "+String(sdCardInitialized?"Inizializzata":"Non Inizializzata / Errore"); if(sdCardInitialized){sP+=" | Dimensione: "+String(csMB)+"MB | Usata: "+String(cuMB)+"MB | Libera: "+String(cfMB)+"MB | Log Scritti: "+String(logCount);} sP+="</li>";
+    sP+="<li><strong>Scheda SD:</strong> "+ sdStatusString +"</li>";
     sP+="</ul><hr><p><a href='/file'>Visualizza File su SD</a> | <a href='/log'>Scarica Log & Azzera</a> | <a href='/del'>Cancella Log Temporaneo</a></p></body></html>"; server.send(200,"text/html",sP);
   });
-  server.on("/file", HTTP_GET, []() { // ... (codice file esistente) ...
-    if (!sdCardInitialized) { server.send(503, "text/plain", "SD not init."); return; }
-    File root = SD.open("/"); if (!root || !root.isDirectory()) { server.send(500, "text/plain", "Err open root SD"); if(root) root.close(); return; }
+  server.on("/file", HTTP_GET, []() { // ... (codice file esistente, aggiunto trigger recovery) ...
+    if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card non disponibile."); return; }
+    if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
+    File root = SD.open("/"); 
+    if (!root || !root.isDirectory()) { 
+        server.send(500, "text/plain", "Err open root SD"); 
+        if(root) root.close(); 
+        triggerSDRecovery("Errore apertura root SD per /file");
+        return; 
+    }
     String html = "<html><head><title>Files su SD</title><style>body{font-family:Arial,sans-serif;margin:15px;}table{width:100%;border-collapse:collapse;}th,td{border:1px solid #ddd;padding:8px;text-align:left;}th{background-color:#f2f2f2;}</style></head><body><h1>Files su Scheda SD</h1><table><tr><th>Nome File</th><th>Dimensione</th><th>Azioni</th></tr>"; File file = root.openNextFile();
-    while(file){ html += "<tr><td>"; if(file.isDirectory()){ html += "<b>[D] "+String(file.name())+"</b>"; } else { html += String(file.name());} html += "</td><td>"; if(!file.isDirectory()){ html += String(file.size()/1024.0,2)+" KB";} else {html += "-";} html += "</td><td>"; if(!file.isDirectory()){html += " (<a href='/download?file="+String(file.name())+"'>Download</a>)";} html += "</td></tr>"; file.close(); file=root.openNextFile(); }
+    while(file){ 
+        html += "<tr><td>"; 
+        if(file.isDirectory()){ html += "<b>[D] "+String(file.name())+"</b>"; } else { html += String(file.name());} 
+        html += "</td><td>"; 
+        if(!file.isDirectory()){ html += String(file.size()/1024.0,2)+" KB";} else {html += "-";} 
+        html += "</td><td>"; 
+        if(!file.isDirectory()){html += " (<a href='/download?file="+String(file.name())+"'>Download</a>)";} 
+        html += "</td></tr>"; 
+        file.close(); 
+        file=root.openNextFile(); 
+    }
     root.close(); html += "</table><br><a href='/status'>Torna allo Stato</a></body></html>"; server.send(200, "text/html", html);
   });
-  server.on("/download", HTTP_GET, []() { // ... (codice download esistente) ...
-    if (!sdCardInitialized) { server.send(503, "text/plain", "SD not init."); return; }
+  server.on("/download", HTTP_GET, []() { // ... (codice download esistente, aggiunto trigger recovery) ...
+    if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card non disponibile."); return; }
+    if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
     if (!server.hasArg("file")) { server.send(400, "text/plain", "Missing 'file' param"); return; }
     String filename=server.arg("file"); if(!filename.startsWith("/")) filename="/"+filename;
     if(!SD.exists(filename)){ server.send(404,"text/plain","File not found: " + filename); return; }
-    File f=SD.open(filename,FILE_READ); if(f){server.sendHeader("Content-Disposition","attachment; filename=\""+filename.substring(filename.lastIndexOf('/')+1)+"\""); server.streamFile(f,"application/octet-stream");f.close();}
-    else server.send(500,"text/plain","Err opening file for download");
+    File f=SD.open(filename,FILE_READ); 
+    if(f){
+        server.sendHeader("Content-Disposition","attachment; filename=\""+filename.substring(filename.lastIndexOf('/')+1)+"\""); 
+        server.streamFile(f,"application/octet-stream");
+        f.close();
+    }
+    else {
+        server.send(500,"text/plain","Err opening file for download");
+        triggerSDRecovery("Errore apertura file per /download: " + filename);
+    }
   });
   server.begin(); serverStarted = true; Serial.println("[Server] Web server started.");
 }
 
 // === Funzione di Polling e Logging degli Input ===
 void pollInputsAndLog() {
+  if (sdRecoveryAttemptInProgress) return; // Non fare polling se stiamo tentando di recuperare la SD per evitare ulteriori errori
   if (monitoredPinsVec.empty()) return;
+
   for (size_t i = 0; i < monitoredPinsVec.size(); ++i) {
     int pin = monitoredPinsVec[i]; if (pin < 0 || pin >= GPIO_NUM_MAX) continue;
     bool currentState = digitalRead(pin);
@@ -741,16 +795,82 @@ void pollInputsAndLog() {
         char pinDesc[10]; snprintf(pinDesc, sizeof(pinDesc), "IN%d", pin);
         if (sdCardInitialized) {
           File f = SD.open("/log.csv", FILE_APPEND);
-          if (f) { f.printf("%s,%s,IO,%s,%d\n", nomeDispositivo.c_str(), timestamp.c_str(), pinDesc, currentState); f.close(); logCount++;
-                   Serial.printf("LOG SD: %s,%s,IO,%s,%d\n", nomeDispositivo.c_str(), timestamp.c_str(), pinDesc, currentState); }
-          else { Serial.printf("[Poll]Err SD write. Log: %s,%s,IO,%s,%d\n",nomeDispositivo.c_str(),timestamp.c_str(),pinDesc,currentState);
-                 if(sdCardInitialized){sdCardInitialized=false; emailAlertSentForSDFailure=false; sendSDFailureEmail("Err scrittura CSV (polling IO)");}}
-        } else { Serial.printf("LOG SERIAL(NoSD):%s,%s,IO,%s,%d\n",nomeDispositivo.c_str(),timestamp.c_str(),pinDesc,currentState); }
+          if (f) { 
+            if (!f.printf("%s,%s,IO,%s,%d\n", nomeDispositivo.c_str(), timestamp.c_str(), pinDesc, currentState)) {
+                Serial.printf("[Poll] Errore scrittura su SD (printf). Log: %s,%s,IO,%s,%d\n",nomeDispositivo.c_str(),timestamp.c_str(),pinDesc,currentState);
+                triggerSDRecovery("Err scrittura CSV (polling IO)");
+            }
+            f.close(); 
+            logCount++;
+            Serial.printf("LOG SD: %s,%s,IO,%s,%d\n", nomeDispositivo.c_str(), timestamp.c_str(), pinDesc, currentState); 
+          }
+          else { 
+            Serial.printf("[Poll] Errore apertura SD per scrittura. Log: %s,%s,IO,%s,%d\n",nomeDispositivo.c_str(),timestamp.c_str(),pinDesc,currentState);
+            triggerSDRecovery("Err apertura CSV (polling IO)");
+          }
+        } else { 
+            Serial.printf("LOG SERIAL(NoSD):%s,%s,IO,%s,%d\n",nomeDispositivo.c_str(),timestamp.c_str(),pinDesc,currentState); 
+            if (!sdRecoveryAttemptInProgress) { // Se la SD non è inizializzata e non siamo in recupero, prova a recuperare
+                triggerSDRecovery("SD non inizializzata durante polling IO");
+            }
+        }
       }
       lastDebounceTimeVec[i] = millis();
     }
   }
 }
+
+// === Funzione di gestione Retry SD ===
+void handleSDRetryLogic() {
+    if (sdRecoveryAttemptInProgress && !sdCardInitialized) { // Solo se il recupero è attivo E la SD non è ancora OK
+        if (millis() >= nextSDRetryTime) {
+            if (sdRetryCount < MAX_SD_RETRIES) {
+                sdRetryCount++;
+                Serial.printf("[SD Recovery] Tentativo %d/%d di reinizializzare la SD (Contesto: %s)...\n", sdRetryCount, MAX_SD_RETRIES, lastSDFailureContext.c_str());
+                spiSD.end(); // Termina SPI prima di reinizializzare
+                delay(50);   // Breve pausa
+                spiSD.begin(6, 5, 7, SD_CS); // Reinizializza SPI
+                
+                if (SD.begin(SD_CS, spiSD, 8000000)) {
+                    Serial.println("[SD Recovery] SD Card reinizializzata con successo!");
+                    sdCardInitialized = true;
+                    sdRecoveryAttemptInProgress = false; 
+                    sdRetryCount = 0;
+                    emailAlertSentForSDFailure = false; // Resetta per permettere futuri alert se necessario
+                    
+                    // Ricrea il file di log se non esiste, come da logica originale di setup
+                    if (!SD.exists("/log.csv")) {
+                        Serial.print("[SD Recovery] /log.csv non trovato. Creazione... ");
+                        File f = SD.open("/log.csv", FILE_WRITE);
+                        if (f) {
+                            f.println("Dispositivo,Timestamp,Tipo,Descrizione,Valore");
+                            f.close();
+                            Serial.println("File /log.csv creato.");
+                        } else {
+                            Serial.println("[SD Recovery] Errore creazione /log.csv dopo recupero.");
+                            // Se fallisce la creazione del file di log, la SD è comunque "up" ma con problemi di file.
+                            // Potremmo voler segnalare questo in modo diverso o lasciare che il prossimo accesso fallisca.
+                            // Per ora, la consideriamo inizializzata ma il prossimo accesso al file potrebbe fallire.
+                        }
+                    }
+                } else {
+                    Serial.printf("[SD Recovery] Tentativo %d fallito.\n", sdRetryCount);
+                    if (sdRetryCount >= MAX_SD_RETRIES) {
+                        Serial.println("[SD Recovery] Tutti i tentativi di recupero SD falliti. Invio email di errore.");
+                        sdRecoveryAttemptInProgress = false; // Termina i tentativi
+                        if (!emailAlertSentForSDFailure) {
+                           sendSDFailureEmail("Recupero SD fallito dopo " + String(MAX_SD_RETRIES) + " tentativi. Contesto: " + lastSDFailureContext);
+                        }
+                    } else {
+                        nextSDRetryTime = millis() + SD_RETRY_INTERVAL; // Prossimo tentativo
+                    }
+                }
+            }
+            // Se sdRetryCount >= MAX_SD_RETRIES, i tentativi sono terminati per questo evento
+        }
+    }
+}
+
 
 // === Setup ===
 void setup() {
@@ -766,7 +886,7 @@ void setup() {
   Serial.println("[Setup] Random seed initialized using analogRead on GPIO" + String(analogSeedPin));
   
   loadConfiguration();
-  Serial.println("\n\n=== LineGuard " + nomeDispositivo + " Init (v5 - OTA, NeoPixel, ESP32-S3 Aware) ===");
+  Serial.println("\n\n=== LineGuard " + nomeDispositivo + " Init (v6 - SD Retry, OTA, NeoPixel) ===");
   Serial.println("[Setup] Firmware Version: " + String(FIRMWARE_VERSION));
   Serial.println("[Setup] Init network..."); WiFi.onEvent(WiFiEvent); 
   
@@ -779,16 +899,37 @@ void setup() {
   } else { Serial.printf("[Setup] Err speed sensor pin (GPIO%d) invalid or no interrupt.\n", active_speed_sensor_pin); }
   
   Serial.print("[Setup] Init SPI for SD (HSPI)... ");
-  spiSD.begin(6, 5, 7, SD_CS);
+  spiSD.begin(6, 5, 7, SD_CS); // CLK, MISO, MOSI, CS
   Serial.println("SPI init.");
   
   Serial.print("[Setup] Init SD Card (SPI)... ");
-  if (SD.begin(SD_CS, spiSD, 8000000)) {
-    Serial.println("SD Card OK."); sdCardInitialized=true; emailAlertSentForSDFailure=false;
-    if(!SD.exists("/log.csv")){ Serial.print("[Setup] /log.csv not found. Creating... "); File f=SD.open("/log.csv",FILE_WRITE);
-      if(f){f.println("Dispositivo,Timestamp,Tipo,Descrizione,Valore"); f.close(); Serial.println("File /log.csv created.");} else {Serial.println("Err create /log.csv."); sendSDFailureEmail("Creazione /log.csv fallita.");}}
-    else {Serial.println("[Setup] /log.csv exists.");}
-  } else { Serial.println("SD Card init FAILED!"); sdCardInitialized=false; sendSDFailureEmail("SD Card init failed @setup."); }
+  if (SD.begin(SD_CS, spiSD, 8000000)) { // Tenta l'inizializzazione
+    Serial.println("SD Card OK."); 
+    sdCardInitialized=true; 
+    emailAlertSentForSDFailure=false;
+    if(!SD.exists("/log.csv")){ 
+        Serial.print("[Setup] /log.csv not found. Creating... "); 
+        File f=SD.open("/log.csv",FILE_WRITE);
+        if(f){
+            if (f.println("Dispositivo,Timestamp,Tipo,Descrizione,Valore")) {
+                 Serial.println("File /log.csv created.");
+            } else {
+                 Serial.println("Err scrittura header /log.csv.");
+                 triggerSDRecovery("Creazione header /log.csv fallita @setup");
+            }
+            f.close();
+        } else {
+            Serial.println("Err create /log.csv."); 
+            triggerSDRecovery("Creazione /log.csv fallita @setup");
+        }
+    } else {
+        Serial.println("[Setup] /log.csv exists.");
+    }
+  } else { 
+    Serial.println("SD Card init FAILED! Avvio tentativi di recupero in background."); 
+    triggerSDRecovery("SD Card init failed @setup");
+    // sdCardInitialized rimane false, gestito da triggerSDRecovery
+  }
   
   Serial.printf("[Setup] Heap pre-pin: %u B\n", ESP.getFreeHeap()); Serial.println("[Setup] Config monitored pins (NVS/default)...");
   if(monitoredPinsVec.empty() && conf_monitored_pins_csv.length()>0) parseMonitoredPins(conf_monitored_pins_csv);
@@ -811,15 +952,30 @@ void loop() {
       while(millis()-st<10000){ if(Serial.available()){cCmd=Serial.readStringUntil('\n');cCmd.trim();break;}delay(100);}
       if(cCmd.equalsIgnoreCase("CONFIRM_ERASE")){ preferences.begin("device-cfg",false); if(preferences.clear())Serial.println("NVS erased.");else Serial.println("Err erasing NVS.");
         preferences.end();Serial.println("Rebooting...");delay(1000);ESP.restart();}else Serial.println("NVS erase cancelled.");}
-    else if(cmd.equalsIgnoreCase("ota_update_test")) { // Comando seriale per testare OTA
+    else if(cmd.equalsIgnoreCase("ota_update_test")) { 
         Serial.println("Avvio test OTA da comando seriale...");
-        handleFirmwareUpdate(); // Chiama direttamente l'handler per test
+        handleFirmwareUpdate(); 
+    } else if (cmd.equalsIgnoreCase("test_sd_fail")) { // Comando di test per fallimento SD
+        Serial.println("Simulazione fallimento scrittura SD per test recovery...");
+        triggerSDRecovery("Test fallimento SD da seriale");
     }
     else if(cmd.length()>0){Serial.print(F("Unknown cmd: "));Serial.println(cmd);}}
-  if(serverStarted)server.handleClient(); checkNetworkStatus();
-  static unsigned long lastNtp=0; if(millis()-lastNtp>3600000 || (!timeSynced&&(wifiConnected||ethernetConnected))){syncTime();lastNtp=millis();}
   
-  pollInputsAndLog();
+  if(serverStarted) server.handleClient(); 
+  checkNetworkStatus();
+  
+  static unsigned long lastNtp=0; 
+  if(millis()-lastNtp > 3600000UL || (!timeSynced && (wifiConnected||ethernetConnected))){ // Ogni ora o se non sinc e connesso
+      syncTime();
+      lastNtp=millis();
+  }
+  
+  handleSDRetryLogic(); // Gestisce i tentativi di recupero SD in modo non bloccante
+
+  if (!sdRecoveryAttemptInProgress) { // Esegui solo se non siamo in fase di recupero SD
+    pollInputsAndLog(); 
+  }
+
 
   unsigned long currMs=millis();
   if(currMs-lastSpeedCalcTimeMillis>=speedCalcIntervalMillis){
@@ -835,27 +991,33 @@ void loop() {
       if (currentSpeedMetersPerMinute < 0.001f && lastLoggedSpeed > SPEED_CHANGE_THRESHOLD && lastLoggedSpeed >=0.0f ) {shouldLogSpeed = true;}
     }
 
-    if (sdCardInitialized && shouldLogSpeed) {
-      String timestamp = getFormattedTimestamp();
-      File f = SD.open("/log.csv", FILE_APPEND);
-      if (f) {
-        f.printf("%s,%s,V,Velocita_mpm,%.2f\n", nomeDispositivo.c_str(), timestamp.c_str(), currentSpeedMetersPerMinute);
-        f.close(); logCount++;
-        Serial.printf("LOGGED TO SD: %s,%s,V,Velocita_mpm,%.2f\n", nomeDispositivo.c_str(), timestamp.c_str(), currentSpeedMetersPerMinute);
-        lastLoggedSpeed = currentSpeedMetersPerMinute;
-      } else {
-        Serial.printf("[Loop][Error] Failed to open /log.csv for speed log. Log: %s,%s,V,Velocita_mpm,%.2f\n", nomeDispositivo.c_str(),timestamp.c_str(),currentSpeedMetersPerMinute);
-        if(sdCardInitialized){sdCardInitialized=false; emailAlertSentForSDFailure=false; sendSDFailureEmail("Err scrittura CSV (velocità)");}
-      }
-    } else if (shouldLogSpeed && !sdCardInitialized) {
-      String timestamp = getFormattedTimestamp();
-      Serial.printf("LOG TO SERIAL (No SD): %s,%s,V,Velocita_mpm,%.2f\n", nomeDispositivo.c_str(), timestamp.c_str(), currentSpeedMetersPerMinute);
-      lastLoggedSpeed = currentSpeedMetersPerMinute;
+    if (shouldLogSpeed) {
+        if (sdCardInitialized) {
+            String timestamp = getFormattedTimestamp();
+            File f = SD.open("/log.csv", FILE_APPEND);
+            if (f) {
+                if (!f.printf("%s,%s,V,Velocita_mpm,%.2f\n", nomeDispositivo.c_str(), timestamp.c_str(), currentSpeedMetersPerMinute)){
+                    Serial.printf("[Loop] Errore scrittura velocità su SD (printf). Log: %s,%s,V,Velocita_mpm,%.2f\n", nomeDispositivo.c_str(),timestamp.c_str(),currentSpeedMetersPerMinute);
+                    triggerSDRecovery("Err scrittura CSV (velocità)");
+                }
+                f.close(); 
+                logCount++;
+                Serial.printf("LOGGED TO SD: %s,%s,V,Velocita_mpm,%.2f\n", nomeDispositivo.c_str(), timestamp.c_str(), currentSpeedMetersPerMinute);
+                lastLoggedSpeed = currentSpeedMetersPerMinute;
+            } else {
+                Serial.printf("[Loop] Errore apertura SD per scrittura velocità. Log: %s,%s,V,Velocita_mpm,%.2f\n", nomeDispositivo.c_str(),timestamp.c_str(),currentSpeedMetersPerMinute);
+                triggerSDRecovery("Err apertura CSV (velocità)");
+            }
+        } else {
+            String timestamp = getFormattedTimestamp();
+            Serial.printf("LOG TO SERIAL (No SD): %s,%s,V,Velocita_mpm,%.2f\n", nomeDispositivo.c_str(), timestamp.c_str(), currentSpeedMetersPerMinute);
+            lastLoggedSpeed = currentSpeedMetersPerMinute;
+            if (!sdRecoveryAttemptInProgress) { // Se la SD non è inizializzata e non siamo in recupero, prova a recuperare
+                triggerSDRecovery("SD non inizializzata durante log velocità");
+            }
+        }
     }
   }
-
-  static unsigned long lastSDEmailChk=0;
-  if(!sdCardInitialized && !emailAlertSentForSDFailure && (ethernetConnected||wifiConnected)){
-    if(millis()-lastSDEmailChk>300000){sendSDFailureEmail("Periodic Check: SD Card not init/failed.");lastSDEmailChk=millis();}}
-  delay(10);
+  // Rimosso il check periodico emailAlertSentForSDFailure perché ora gestito da handleSDRetryLogic
+  delay(10); 
 }
