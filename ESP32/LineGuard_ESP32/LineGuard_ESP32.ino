@@ -24,7 +24,7 @@
 // #include <ArduinoJson.h> // Non più necessaria per OTA da URL diretto
 
 // --- VERSIONE FIRMWARE CORRENTE ---
-#define FIRMWARE_VERSION "0.9.8-URL_OTA" // Aggiornato per nuova logica OTA
+#define FIRMWARE_VERSION "0.9.8-URL_OTA_DebugHeap" // Aggiornato per debug heap
 
 // --- RIMOZIONE CONFIGURAZIONE OTA GITHUB ---
 // Le costanti relative a GitHub sono state rimosse.
@@ -96,13 +96,13 @@ const unsigned long wifiRetryDelay = 30000;
 int active_speed_sensor_pin;
 float active_meters_per_pulse;
 float currentSpeedMetersPerMinute = 0.0;
-float lastLoggedSpeed = -1.0f; 
-const float SPEED_CHANGE_THRESHOLD = 0.1f; 
+float lastLoggedSpeed = -1.0f;
+const float SPEED_CHANGE_THRESHOLD = 0.1f;
 
-volatile unsigned long lastPulseTimeMillisISR = 0; 
-volatile bool newPulseFlagISR = false;             
-unsigned long previousPulseTimeForCalc = 0;   
-const unsigned long SPEED_TIMEOUT_DURATION_MS = 10000; 
+volatile unsigned long lastPulseTimeMillisISR = 0;
+volatile bool newPulseFlagISR = false;
+unsigned long previousPulseTimeForCalc = 0;
+const unsigned long SPEED_TIMEOUT_DURATION_MS = 10000;
 
 SMTPSession smtp;
 int sdRetryCount = 0;
@@ -132,13 +132,13 @@ void pollInputsAndLog();
 void handleSDRetryLogic();
 String getFormattedTimestamp(unsigned long rawMillis = 0);
 void triggerSDRecovery(const String& context);
-void calculateSpeedAndLog(); 
+void calculateSpeedAndLog();
 
 
 // ISR per sensore velocità
 void IRAM_ATTR handleSpeedPulse() {
-  lastPulseTimeMillisISR = millis(); 
-  newPulseFlagISR = true;            
+  lastPulseTimeMillisISR = millis();
+  newPulseFlagISR = true;
 }
 
 // === Funzioni Utilità ===
@@ -156,10 +156,10 @@ void triggerSDRecovery(const String& context) {
     if (!sdRecoveryAttemptInProgress) {
         Serial.println("[SD Error] Rilevato problema SD: " + context + ". Avvio tentativi di recupero.");
         sdCardInitialized = false;
-        emailAlertSentForSDFailure = false; 
+        emailAlertSentForSDFailure = false;
         sdRecoveryAttemptInProgress = true;
         sdRetryCount = 0;
-        nextSDRetryTime = millis(); 
+        nextSDRetryTime = millis();
         lastSDFailureContext = context;
     } else {
         Serial.println("[SD Error] Rilevato problema SD: " + context + ", ma recupero già in corso (contesto precedente: " + lastSDFailureContext + ").");
@@ -188,7 +188,7 @@ void parseMonitoredPins(const String& csv) {
 
 String getFormattedTimestamp(unsigned long rawMillis /*= 0*/) {
   struct tm timeinfo;
-  if (getLocalTime(&timeinfo, 50)) { 
+  if (getLocalTime(&timeinfo, 50)) {
     char buffer[30]; strftime(buffer, sizeof(buffer), "%Y-%m-%d, %H:%M:%S", &timeinfo); return String(buffer);
   } else { String fallback = ""; if (!timeSynced) fallback = "1970-01-01, 00:00:00 (No NTP Sync)"; else fallback = "0000-00-00, 00:00:00 (Time Error)"; return fallback; }
 }
@@ -219,20 +219,20 @@ void loadConfiguration() {
   conf_email_smtp_port = preferences.getInt("emailPort", DEFAULT_EMAIL_SMTP_PORT);
   conf_email_recipient_to = preferences.getString("emailTo", DEFAULT_EMAIL_RECIPIENT_TO);
   conf_email_recipient_cc_csv = preferences.getString("emailCcCsv", DEFAULT_EMAIL_RECIPIENT_CC_CSV);
-  
+
   // NUOVA SEZIONE PER URL OTA
   conf_ota_firmware_url = preferences.getString("otaFwUrl", DEFAULT_OTA_FIRMWARE_URL);
 
   // Salva i valori di default se le chiavi non esistono
-  if (!preferences.isKey("wifiSsid")) preferences.putString("wifiSsid",conf_ssid); 
+  if (!preferences.isKey("wifiSsid")) preferences.putString("wifiSsid",conf_ssid);
   if (!preferences.isKey("wifiPass")) preferences.putString("wifiPass",conf_password);
-  if (!preferences.isKey("pinsCSV")) preferences.putString("pinsCSV",conf_monitored_pins_csv); 
+  if (!preferences.isKey("pinsCSV")) preferences.putString("pinsCSV",conf_monitored_pins_csv);
   if (!preferences.isKey("speedPin")) preferences.putInt("speedPin",conf_speed_sensor_pin);
-  if (!preferences.isKey("metersPulse")) preferences.putFloat("metersPulse",conf_meters_per_pulse); 
+  if (!preferences.isKey("metersPulse")) preferences.putFloat("metersPulse",conf_meters_per_pulse);
   if (!preferences.isKey("emailSender")) preferences.putString("emailSender",conf_email_sender);
-  if (!preferences.isKey("emailPass")) preferences.putString("emailPass",conf_email_sender_password); 
+  if (!preferences.isKey("emailPass")) preferences.putString("emailPass",conf_email_sender_password);
   if (!preferences.isKey("emailSmtp")) preferences.putString("emailSmtp",conf_email_smtp_server);
-  if (!preferences.isKey("emailPort")) preferences.putInt("emailPort",conf_email_smtp_port); 
+  if (!preferences.isKey("emailPort")) preferences.putInt("emailPort",conf_email_smtp_port);
   if (!preferences.isKey("emailTo")) preferences.putString("emailTo",conf_email_recipient_to);
   if (!preferences.isKey("emailCcCsv")) preferences.putString("emailCcCsv",conf_email_recipient_cc_csv);
   if (!preferences.isKey("otaFwUrl")) preferences.putString("otaFwUrl", conf_ota_firmware_url); // Salva il default (o il valore letto se la chiave non c'era)
@@ -248,7 +248,7 @@ void loadConfiguration() {
   Serial.println("[Config] Email Mittente: " + conf_email_sender);
   Serial.println("[Config] Email Destinatario TO: " + conf_email_recipient_to);
   Serial.println("[Config] Email Destinatari CC: " + conf_email_recipient_cc_csv);
-  Serial.println("[Config] URL Firmware OTA: " + (conf_ota_firmware_url.isEmpty() ? "Non impostato" : conf_ota_firmware_url)); 
+  Serial.println("[Config] URL Firmware OTA: " + (conf_ota_firmware_url.isEmpty() ? "Non impostato" : conf_ota_firmware_url));
 }
 
 // === Setup ===
@@ -323,7 +323,7 @@ void setup() {
   if (!monitoredPinsVec.empty()) {
     for (size_t i = 0; i < monitoredPinsVec.size(); ++i) {
       int pin = monitoredPinsVec[i];
-      if (pin >= 0 && pin <= 48 && digitalPinToInterrupt(pin) != -1) { 
+      if (pin >= 0 && pin <= 48 && digitalPinToInterrupt(pin) != -1) {
         pinMode(pin, INPUT_PULLDOWN);
         if (i < lastPinStatesVec.size()) lastPinStatesVec[i] = digitalRead(pin);
         if (i < lastDebounceTimeVec.size()) lastDebounceTimeVec[i] = 0;
@@ -342,23 +342,23 @@ void setup() {
 
 // === NUOVA Funzione per Calcolo Velocità e Log ===
 void calculateSpeedAndLog() {
-    unsigned long currentMillisLoop = millis(); 
+    unsigned long currentMillisLoop = millis();
     unsigned long localLastPulseTime;
     bool localNewPulseReceived;
 
     noInterrupts();
     localNewPulseReceived = newPulseFlagISR;
-    localLastPulseTime = lastPulseTimeMillisISR; 
+    localLastPulseTime = lastPulseTimeMillisISR;
     if (localNewPulseReceived) {
-        newPulseFlagISR = false; 
+        newPulseFlagISR = false;
     }
     interrupts();
 
     if (localNewPulseReceived) {
         if (previousPulseTimeForCalc != 0 && localLastPulseTime > previousPulseTimeForCalc) {
             unsigned long deltaTime = localLastPulseTime - previousPulseTimeForCalc;
-            if (deltaTime > 0 && deltaTime < (SPEED_TIMEOUT_DURATION_MS + 2000) ) { 
-                if (active_meters_per_pulse > 0.00001f && deltaTime > 0) { 
+            if (deltaTime > 0 && deltaTime < (SPEED_TIMEOUT_DURATION_MS + 2000) ) {
+                if (active_meters_per_pulse > 0.00001f && deltaTime > 0) {
                     currentSpeedMetersPerMinute = (active_meters_per_pulse * 60000.0) / (float)deltaTime;
                     Serial.printf("[SPEED_CALC] DeltaT: %lu ms, Speed: %.2f m/min\n", deltaTime, currentSpeedMetersPerMinute);
                 } else {
@@ -370,13 +370,13 @@ void calculateSpeedAndLog() {
         } else {
              Serial.println("[SPEED_CALC] Primo impulso ricevuto (o dopo reset). In attesa del secondo per calcolare DeltaT.");
         }
-        previousPulseTimeForCalc = localLastPulseTime; 
+        previousPulseTimeForCalc = localLastPulseTime;
     }
 
     unsigned long timeSinceLastPulseISR = currentMillisLoop - localLastPulseTime;
 
-    if (previousPulseTimeForCalc == 0) { 
-        if (localLastPulseTime == 0 && currentMillisLoop > SPEED_TIMEOUT_DURATION_MS) { 
+    if (previousPulseTimeForCalc == 0) {
+        if (localLastPulseTime == 0 && currentMillisLoop > SPEED_TIMEOUT_DURATION_MS) {
              if (currentSpeedMetersPerMinute != 0.0) {
                 currentSpeedMetersPerMinute = 0.0;
                 Serial.println("[SPEED_CALC] Timeout iniziale. Nessun impulso mai ricevuto. Velocità impostata a 0.");
@@ -387,18 +387,18 @@ void calculateSpeedAndLog() {
                 Serial.printf("[SPEED_CALC] Timeout dopo il primo impulso (senza un secondo). Velocità impostata a 0. Time since last: %lu\n", timeSinceLastPulseISR);
              }
         }
-    } else { 
+    } else {
         if (timeSinceLastPulseISR > SPEED_TIMEOUT_DURATION_MS) {
             if (currentSpeedMetersPerMinute != 0.0) {
                 currentSpeedMetersPerMinute = 0.0;
-                previousPulseTimeForCalc = 0; 
+                previousPulseTimeForCalc = 0;
                 Serial.printf("[SPEED_CALC] Timeout! Nessun impulso da oltre %lu ms. Velocità impostata a 0.\n", SPEED_TIMEOUT_DURATION_MS);
             }
         }
     }
 
     bool shouldLogSpeed = false;
-    if (active_meters_per_pulse > 0.00001f) { 
+    if (active_meters_per_pulse > 0.00001f) {
         if (abs(currentSpeedMetersPerMinute - lastLoggedSpeed) > SPEED_CHANGE_THRESHOLD) {
             shouldLogSpeed = true;
         }
@@ -452,7 +452,7 @@ void loop() {
         preferences.end();Serial.println("Rebooting...");delay(1000);ESP.restart();}else Serial.println("NVS erase cancelled.");}
     else if(cmd.equalsIgnoreCase("ota_update_test")) { // Questo comando ora userà l'URL configurato
         Serial.println("Avvio test OTA da comando seriale (userà URL da NVS)...");
-        handleFirmwareUpdate(); 
+        handleFirmwareUpdate();
     } else if (cmd.equalsIgnoreCase("test_sd_fail")) {
         Serial.println("Simulazione fallimento scrittura SD per test recovery...");
         triggerSDRecovery("Test fallimento SD da seriale");
@@ -476,7 +476,7 @@ void loop() {
 
   calculateSpeedAndLog();
 
-  delay(10); 
+  delay(10);
 }
 
 
@@ -525,7 +525,7 @@ void sendSDFailureEmail(const String& errorMessage) {
     Serial.println("[Email] Impossibile inviare email: nessuna connessione di rete.");
     return;
   }
-  if (emailAlertSentForSDFailure) { 
+  if (emailAlertSentForSDFailure) {
     Serial.println("[Email] Email di errore SD già inviata per questo evento di fallimento.");
     return;
   }
@@ -536,20 +536,20 @@ void sendSDFailureEmail(const String& errorMessage) {
 
   Serial.println("[Email] Tentativo di invio email per errore SD: " + errorMessage);
 
-  ESP_Mail_Session session_obj; 
+  ESP_Mail_Session session_obj;
   session_obj.server.host_name = conf_email_smtp_server.c_str();
   session_obj.server.port = conf_email_smtp_port;
   session_obj.login.email = conf_email_sender.c_str();
   session_obj.login.password = conf_email_sender_password.c_str();
-  session_obj.login.user_domain = ""; 
-  session_obj.time.gmt_offset = 1; 
-  session_obj.time.day_light_offset = 1; 
-  
+  session_obj.login.user_domain = "";
+  session_obj.time.gmt_offset = 1;
+  session_obj.time.day_light_offset = 1;
+
   SMTP_Message message;
   message.sender.name = nomeDispositivo;
   message.sender.email = conf_email_sender.c_str();
   message.subject = "AVVISO: Problema Scheda SD su Dispositivo " + nomeDispositivo;
-  
+
   String htmlMsg = "<h2>Allarme Problema Scheda SD</h2>";
   htmlMsg += "<p>Il dispositivo <b>" + nomeDispositivo + "</b> ha riscontrato un problema con la scheda SD.</p>";
   htmlMsg += "<p><b>Dettaglio Problema:</b> " + errorMessage + "</p>";
@@ -576,13 +576,13 @@ void sendSDFailureEmail(const String& errorMessage) {
       }
     }
   }
-  
-  smtp.debug(0);  
+
+  smtp.debug(0);
 
   Serial.println("[Email] Connessione al server SMTP...");
-  if (!smtp.connect(&session_obj)) {  
+  if (!smtp.connect(&session_obj)) {
     Serial.printf("[Email] Connessione SMTP fallita: %s\n", smtp.errorReason().c_str());
-    return;  
+    return;
   }
 
   Serial.println("[Email] Invio del messaggio...");
@@ -590,7 +590,7 @@ void sendSDFailureEmail(const String& errorMessage) {
     Serial.printf("[Email] Invio email fallito: %s\n", smtp.errorReason().c_str());
   } else {
     Serial.println("[Email] Email inviata con successo!");
-    emailAlertSentForSDFailure = true;  
+    emailAlertSentForSDFailure = true;
   }
   if(smtp.connected()) smtp.closeSession();
 }
@@ -610,76 +610,81 @@ void WiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
       break;
     case ARDUINO_EVENT_ETH_DISCONNECTED: Serial.println("[WiFiEvent] Ethernet Disconnected."); ethernetConnected = false; break;
     case ARDUINO_EVENT_WIFI_STA_START: WiFi.setHostname(nomeDispositivo.c_str()); Serial.println("[WiFiEvent] WiFi Station interface started. Hostname:" + nomeDispositivo); break;
-    case ARDUINO_EVENT_WIFI_STA_CONNECTED: Serial.println("[WiFiEvent] WiFi MAC Connected to AP: " + String(reinterpret_cast<char*>(info.wifi_sta_connected.ssid))); break; 
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED: Serial.println("[WiFiEvent] WiFi MAC Connected to AP: " + String(reinterpret_cast<char*>(info.wifi_sta_connected.ssid))); break;
     case ARDUINO_EVENT_WIFI_STA_GOT_IP:
       Serial.println("[WiFiEvent] WiFi IP: " + WiFi.localIP().toString());
       wifiConnected = true; attemptingWiFiConnection = false;
       if (ethernetConnected) { Serial.println("[WiFiEvent] WiFi connesso, ma Ethernet è preferito. Disconnessione WiFi..."); WiFi.disconnect(true); wifiConnected = false; }
       else { if (!serverStarted) startServer(); if (!timeSynced) syncTime(); }
       break;
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: Serial.println("[WiFiEvent] Disconnected from WiFi AP."); wifiConnected = false; attemptingWiFiConnection = false; timeSynced = false; break; 
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: Serial.println("[WiFiEvent] Disconnected from WiFi AP."); wifiConnected = false; attemptingWiFiConnection = false; timeSynced = false; break;
     default: break;
   }
 }
 
 // === Funzioni di Rete Ausiliarie ===
 void startWiFi() {
-  if (ethernetConnected || wifiConnected || attemptingWiFiConnection) return; 
-  if (millis() - lastWiFiAttemptTime < wifiRetryDelay && lastWiFiAttemptTime != 0) return; 
+  if (ethernetConnected || wifiConnected || attemptingWiFiConnection) return;
+  if (millis() - lastWiFiAttemptTime < wifiRetryDelay && lastWiFiAttemptTime != 0) return;
   Serial.println("[WiFi] Attempting to connect to WiFi: " + conf_ssid);
   attemptingWiFiConnection = true; lastWiFiAttemptTime = millis();
   if (conf_use_static_ip) {
     if (!WiFi.config(conf_static_ip, conf_gateway, conf_subnet, conf_dns1)) { Serial.println("[WiFi] STA Failed to configure static IP!"); }
-  } else { WiFi.config(IPAddress(0,0,0,0), IPAddress(0,0,0,0), IPAddress(0,0,0,0), IPAddress(0,0,0,0)); } 
+  } else { WiFi.config(IPAddress(0,0,0,0), IPAddress(0,0,0,0), IPAddress(0,0,0,0), IPAddress(0,0,0,0)); }
   WiFi.begin(conf_ssid.c_str(), conf_password.c_str());
   Serial.println("[WiFi] Connection process initiated.");
 }
 void checkNetworkStatus() {
-  if (!ethernetConnected && !wifiConnected && !attemptingWiFiConnection) {  
-      startWiFi(); 
-  } else if (ethernetConnected && WiFi.status() == WL_CONNECTED) {  
-      Serial.println("[NetworkCheck] Ethernet active, ensuring WiFi is disconnected.");  
-      WiFi.disconnect(true);  
-      wifiConnected = false;  
-      attemptingWiFiConnection = false;  
+  if (!ethernetConnected && !wifiConnected && !attemptingWiFiConnection) {
+      startWiFi();
+  } else if (ethernetConnected && WiFi.status() == WL_CONNECTED) {
+      Serial.println("[NetworkCheck] Ethernet active, ensuring WiFi is disconnected.");
+      WiFi.disconnect(true);
+      wifiConnected = false;
+      attemptingWiFiConnection = false;
   }
 }
 void syncTime() {
-  if (!timeSynced && (ethernetConnected || wifiConnected)) {  
+  if (!timeSynced && (ethernetConnected || wifiConnected)) {
     Serial.println("[Time] Attempting to sync time with NTP server...");
-    configTzTime("CET-1CEST,M3.5.0/2,M10.5.0/3", "pool.ntp.org", "time.nist.gov");  
-    struct tm timeinfo; int retries = 0; const int maxRetries = 20;  
-    while(!getLocalTime(&timeinfo, 0) && retries < maxRetries) { if(timeinfo.tm_year > (2000-1900)) break; Serial.print("."); delay(50); retries++; }  
+    configTzTime("CET-1CEST,M3.5.0/2,M10.5.0/3", "pool.ntp.org", "time.nist.gov");
+    struct tm timeinfo; int retries = 0; const int maxRetries = 20;
+    while(!getLocalTime(&timeinfo, 0) && retries < maxRetries) { if(timeinfo.tm_year > (2000-1900)) break; Serial.print("."); delay(50); retries++; }
     if (timeinfo.tm_year > (2000 - 1900)) { Serial.println("\n[Time] Time synchronized successfully!"); Serial.printf("[Time] Current time: %s\n", getFormattedTimestamp().c_str()); timeSynced = true; }
     else { Serial.println("\n[Time][Error] Failed to synchronize time via NTP after retries."); timeSynced = false; }
   }
 }
 
-// --- FUNZIONI OTA (MODIFICATE) ---
+// --- FUNZIONI OTA (MODIFICATE CON LOG HEAP) ---
 void performUpdate(String firmware_url, String new_version_name) {
     ota_status_message = "Avvio aggiornamento alla versione '" + new_version_name + "' da: " + firmware_url + "<br>Attendere il riavvio del dispositivo...";
     Serial.println(ota_status_message);
-    
-    String html = "<html><head><title>Aggiornamento Firmware</title><meta http-equiv='refresh' content='30;url=/status'></head>"; // Aumentato timeout refresh
+    Serial.printf("[OTA] Free Heap before starting update: %u bytes\n", ESP.getFreeHeap()); // <-- LOG HEAP AGGIUNTO
+
+    String html = "<html><head><title>Aggiornamento Firmware</title><meta http-equiv='refresh' content='30;url=/status'></head>";
     html += "<body><h1>Aggiornamento Firmware</h1><p>" + ota_status_message + "</p>";
     html += "<p>Il dispositivo si riavvier&agrave; automaticamente se l'aggiornamento ha successo. Questo pu&ograve; richiedere alcuni minuti.</p>";
     html += "<p>Se il dispositivo non si riavvia entro 1-2 minuti, controlla la console seriale per errori.</p>";
     html += "<p><a href='/status'>Torna allo stato (dopo il riavvio o in caso di problemi)</a></p></body></html>";
     server.send(200, "text/html", html);
-    delay(200); 
+    delay(200);
 
-    WiFiClientSecure clientSecureOTA; 
-    clientSecureOTA.setInsecure(); // Permette URL HTTPS con certificati autofirmati/non validati e dovrebbe funzionare anche per HTTP
-    
+    WiFiClientSecure clientSecureOTA;
+    clientSecureOTA.setInsecure();
+    Serial.printf("[OTA] Free Heap after WiFiClientSecure init: %u bytes\n", ESP.getFreeHeap()); // <-- LOG HEAP AGGIUNTO
+
+    // httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); // Opzionale, per debug redirect
+
     t_httpUpdate_return ret = httpUpdate.update(clientSecureOTA, firmware_url);
+    Serial.printf("[OTA] Free Heap after httpUpdate.update call: %u bytes\n", ESP.getFreeHeap()); // <-- LOG HEAP AGGIUNTO
 
     switch (ret) {
         case HTTP_UPDATE_FAILED:
             ota_status_message = "Errore aggiornamento: " + httpUpdate.getLastErrorString() + " (Codice: " + String(httpUpdate.getLastError()) +")";
             Serial.printf("[OTA] Update failed: Error (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
             break;
-        case HTTP_UPDATE_NO_UPDATES: 
-            ota_status_message = "Nessun aggiornamento effettuato (il server potrebbe aver indicato che non era necessario o l'URL era identico)."; 
+        case HTTP_UPDATE_NO_UPDATES:
+            ota_status_message = "Nessun aggiornamento effettuato (il server potrebbe aver indicato che non era necessario o l'URL era identico).";
             Serial.println("[OTA] No updates performed by server.");
             break;
         case HTTP_UPDATE_OK:
@@ -714,7 +719,7 @@ void handleFirmwareUpdate() {
     if (!conf_ota_firmware_url.startsWith("http://") && !conf_ota_firmware_url.startsWith("https://")) {
         ota_status_message = "Errore: L'URL del firmware OTA fornito non sembra valido (deve iniziare con http:// o https://).<br>URL: " + conf_ota_firmware_url;
         Serial.println("[OTA] " + ota_status_message);
-        server.sendHeader("Location", "/otastatus", true); 
+        server.sendHeader("Location", "/otastatus", true);
         server.send(302, "text/plain", "");
         return;
     }
@@ -727,9 +732,10 @@ void handleFirmwareUpdate() {
 
     ota_status_message = "Tentativo di aggiornamento firmware alla versione '" + pseudo_version + "' dall'URL: " + conf_ota_firmware_url;
     Serial.println("[OTA] " + ota_status_message);
-    
-    performUpdate(conf_ota_firmware_url, pseudo_version); 
-    
+    Serial.printf("[OTA] Free Heap before calling performUpdate: %u bytes\n", ESP.getFreeHeap()); // <-- LOG HEAP AGGIUNTO
+
+    performUpdate(conf_ota_firmware_url, pseudo_version);
+
     // Se performUpdate ritorna (es. per un errore), ota_status_message sarà già aggiornato.
     // Reindirizza a /otastatus per mostrare il messaggio di errore.
     if (ota_status_message.startsWith("Errore aggiornamento:") || ota_status_message.startsWith("Nessun aggiornamento")) {
@@ -741,15 +747,14 @@ void handleFirmwareUpdate() {
 
 void handleOTAStatusPage() {
     String html = "<html><head><title>Stato Aggiornamento Firmware</title>";
-    // Non fare refresh se l'aggiornamento è stato avviato (attesa riavvio) o se c'è un errore specifico da leggere.
-    if (!ota_status_message.startsWith("Avvio aggiornamento") && 
+    if (!ota_status_message.startsWith("Avvio aggiornamento") &&
         !ota_status_message.startsWith("Tentativo di aggiornamento") &&
-        !ota_status_message.startsWith("Aggiornamento completato") && 
-        !ota_status_message.startsWith("Errore aggiornamento:") && 
+        !ota_status_message.startsWith("Aggiornamento completato") &&
+        !ota_status_message.startsWith("Errore aggiornamento:") &&
         !ota_status_message.startsWith("Errore: L'URL del firmware OTA non è configurato") &&
         !ota_status_message.startsWith("Errore: L'URL del firmware OTA fornito non sembra valido")
         ) {
-         // html += "<meta http-equiv='refresh' content='10;url=/status'>"; // Potrebbe essere rimosso o modificato
+         // html += "<meta http-equiv='refresh' content='10;url=/status'>";
     }
     html += "<style>body {font-family: Arial, sans-serif; margin: 20px;} h1 {color: #333;} p {line-height: 1.6;} a {color: #007bff; text-decoration: none;} a:hover{text-decoration: underline;}</style>";
     html += "</head><body><h1>Stato Aggiornamento Firmware</h1>";
@@ -758,14 +763,14 @@ void handleOTAStatusPage() {
     if (ota_status_message.startsWith("Avvio aggiornamento") || ota_status_message.startsWith("Tentativo di aggiornamento") || ota_status_message.startsWith("Aggiornamento completato")) {
         html += "<p>Se l'aggiornamento &egrave; stato avviato con successo, il dispositivo si riavvier&agrave; a breve.</p>";
     }
-    
-    if (ota_status_message.startsWith("Errore: L'URL del firmware OTA non è configurato") || 
+
+    if (ota_status_message.startsWith("Errore: L'URL del firmware OTA non è configurato") ||
         ota_status_message.startsWith("Errore: L'URL del firmware OTA fornito non sembra valido")) {
         html += "<p><a href='/config'>Vai alla Pagina di Configurazione</a> per impostare o correggere l'URL.</p>";
     }
 
     html += "<p><a href='/status'>Torna alla pagina di Stato Principale</a></p>";
-    html += "<p><a href='/doupdate'>Tenta nuovamente l'aggiornamento (se configurato)</a></p>"; // Link per ritentare
+    html += "<p><a href='/doupdate'>Tenta nuovamente l'aggiornamento (se configurato)</a></p>";
     html += "</body></html>";
     server.send(200, "text/html", html);
 }
@@ -782,7 +787,7 @@ void handleConfigPage() {
   html += "label {display: inline-block; width: 220px; margin-bottom: 8px; vertical-align: top;}";
   html += "input[type='text'], input[type='number'], input[type='password'] {width: calc(100% - 230px); padding: 8px; margin-bottom: 12px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;}";
   html += "input[type='checkbox'] {margin-right: 5px; vertical-align: middle;}";
-  html += "label[for='useStaticIP'] {width: auto;}";  
+  html += "label[for='useStaticIP'] {width: auto;}";
   html += "input[type='submit'] {background-color: #28a745; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; font-size: 1em;}";
   html += "input[type='submit']:hover {background-color: #218838;}";
   html += "small {color: #555; display: block; margin-top: -8px; margin-bottom: 10px;}";
@@ -810,7 +815,7 @@ void handleConfigPage() {
   html += "<small>Es. 39,40,41,42 (verifica pin validi per ESP32)</small>";
   html += "</fieldset>";
   html += "<fieldset><legend>Configurazione Sensore Velocità</legend>";
-  html += "<label for='speedPin'>Pin Sensore Velocità:</label><input type='number' id='speedPin' name='speedPin' value='" + String(conf_speed_sensor_pin) + "' min='-1' max='48'><br><small>(-1 per disabilitare)</small><br>";  
+  html += "<label for='speedPin'>Pin Sensore Velocità:</label><input type='number' id='speedPin' name='speedPin' value='" + String(conf_speed_sensor_pin) + "' min='-1' max='48'><br><small>(-1 per disabilitare)</small><br>";
   html += "<label for='metersPulse'>Metri per Impulso:</label><input type='text' id='metersPulse' name='metersPulse' value='" + String(conf_meters_per_pulse, 5) + "'><br><small>(Es. 1.30381, usa il punto come separatore decimale)</small>";
   html += "</fieldset>";
   html += "<fieldset><legend>Configurazione Allarmi Email (Errore SD)</legend>";
@@ -821,10 +826,10 @@ void handleConfigPage() {
   html += "<label for='emailTo'>Email Destinatario (TO):</label><input type='text' id='emailTo' name='emailTo' value='" + conf_email_recipient_to + "' required><br>";
   html += "<label for='emailCcCsv'>Email Dest. (CC, CSV):</label><input type='text' id='emailCcCsv' name='emailCcCsv' value='" + conf_email_recipient_cc_csv + "'><br><small>Es. mail1@ex.com,mail2@ex.com</small>";
   html += "</fieldset>";
-  
+
   // NUOVO FIELDSET PER URL OTA
   html += "<fieldset><legend>Configurazione Aggiornamento Firmware (OTA)</legend>";
-  html += "<label for='otaFwUrl'>URL Firmware (.bin):</label><input type='text' id='otaFwUrl' name='otaFwUrl' value='" + conf_ota_firmware_url + "' style='width: calc(100% - 230px);'><br>"; // Aggiunto style per coerenza
+  html += "<label for='otaFwUrl'>URL Firmware (.bin):</label><input type='text' id='otaFwUrl' name='otaFwUrl' value='" + conf_ota_firmware_url + "' style='width: calc(100% - 230px);'><br>";
   html += "<small>Inserisci l'URL completo del file firmware .bin per l'aggiornamento OTA. Lascia vuoto per disabilitare l'aggiornamento da URL.</small>";
   html += "</fieldset>";
 
@@ -838,11 +843,11 @@ void handleConfigPage() {
 void handleSaveConfig() {
   if (server.method() != HTTP_POST) { server.send(405, "text/plain", "Method Not Allowed"); return; }
   Serial.println("[Config] Ricevuta richiesta /saveconfig");
-  preferences.begin("device-cfg", false);  
+  preferences.begin("device-cfg", false);
   if (server.hasArg("devName")) { String val = server.arg("devName"); if (val.length() > 0) preferences.putString("devName", val); }
   if (server.hasArg("wifiSsid")) { String val = server.arg("wifiSsid"); if (val.length() > 0) preferences.putString("wifiSsid", val); }
   if (server.hasArg("wifiPass")) { String val = server.arg("wifiPass"); if (val.length() > 0 ) preferences.putString("wifiPass", val);  }
-  bool newUseStaticIP = server.hasArg("useStaticIP"); preferences.putBool("useStaticIP", newUseStaticIP); preferences.putBool("netCfgDone", true);  
+  bool newUseStaticIP = server.hasArg("useStaticIP"); preferences.putBool("useStaticIP", newUseStaticIP); preferences.putBool("netCfgDone", true);
   if (newUseStaticIP) {
     if (server.hasArg("staticIP")) preferences.putString("staticIP", server.arg("staticIP"));
     if (server.hasArg("gatewayIP")) preferences.putString("gatewayIP", server.arg("gatewayIP"));
@@ -850,15 +855,15 @@ void handleSaveConfig() {
     if (server.hasArg("dns1IP")) preferences.putString("dns1IP", server.arg("dns1IP"));
   }
   if (server.hasArg("pinsCSV")) { String val = server.arg("pinsCSV"); preferences.putString("pinsCSV", val); }
-  if (server.hasArg("speedPin")) { int val = server.arg("speedPin").toInt(); if (val >= -1 && val <= 48) preferences.putInt("speedPin", val); }  
+  if (server.hasArg("speedPin")) { int val = server.arg("speedPin").toInt(); if (val >= -1 && val <= 48) preferences.putInt("speedPin", val); }
   if (server.hasArg("metersPulse")) {
     String metersPulseStr = server.arg("metersPulse"); std::string stdStr = metersPulseStr.c_str();
-    std::replace(stdStr.begin(), stdStr.end(), ',', '.');  
+    std::replace(stdStr.begin(), stdStr.end(), ',', '.');
     float val = atof(stdStr.c_str());
     if (val >= 0) preferences.putFloat("metersPulse", val);
   }
   if (server.hasArg("emailSender")) preferences.putString("emailSender", server.arg("emailSender"));
-  if (server.hasArg("emailPass")) {String val = server.arg("emailPass"); if(val.length() > 0) preferences.putString("emailPass", val);}  
+  if (server.hasArg("emailPass")) {String val = server.arg("emailPass"); if(val.length() > 0) preferences.putString("emailPass", val);}
   if (server.hasArg("emailSmtp")) preferences.putString("emailSmtp", server.arg("emailSmtp"));
   if (server.hasArg("emailPort")) { int val = server.arg("emailPort").toInt(); if (val > 0 && val <= 65535) preferences.putInt("emailPort", val);}
   if (server.hasArg("emailTo")) preferences.putString("emailTo", server.arg("emailTo"));
@@ -867,11 +872,11 @@ void handleSaveConfig() {
   // NUOVA SEZIONE PER SALVATAGGIO URL OTA
   if (server.hasArg("otaFwUrl")) {
     String val = server.arg("otaFwUrl");
-    preferences.putString("otaFwUrl", val); // Salva l'URL fornito
+    preferences.putString("otaFwUrl", val);
     Serial.println("[Config] Salvato URL OTA: " + val);
   }
 
-  preferences.end();  
+  preferences.end();
   String html = "<html><head><title>Configurazione Salvata</title><meta http-equiv='refresh' content='3;url=/'></head><body><h1>Configurazione Salvata!</h1><p>Il dispositivo si riavvier&agrave; tra poco.</p><p><a href='/'>Attendere o clicca.</a></p></body></html>";
   server.send(200, "text/html", html);
   delay(1000); Serial.println("[Config] Nuova configurazione salvata. Riavvio..."); ESP.restart();
@@ -885,20 +890,20 @@ void startServer() {
   server.on("/", HTTP_GET, [](){ server.sendHeader("Location", "/status", true); server.send(302, "text/plain", ""); });
   server.on("/config", HTTP_GET, handleConfigPage);
   server.on("/saveconfig", HTTP_POST, handleSaveConfig);
-  server.on("/doupdate", HTTP_GET, handleFirmwareUpdate); // Userà la nuova logica
-  server.on("/otastatus", HTTP_GET, handleOTAStatusPage);  // Pagina di stato per OTA
-  server.on("/log", HTTP_GET, []() {  
+  server.on("/doupdate", HTTP_GET, handleFirmwareUpdate);
+  server.on("/otastatus", HTTP_GET, handleOTAStatusPage);
+  server.on("/log", HTTP_GET, []() {
     if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card non disponibile."); return; }
     if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
 
-    if (SD.exists("/log_temp.csv")) SD.remove("/log_temp.csv");  
+    if (SD.exists("/log_temp.csv")) SD.remove("/log_temp.csv");
     File oF = SD.open("/log.csv", FILE_READ);
     if (!oF) { server.send(500, "text/plain", "Errore apertura /log.csv per lettura"); triggerSDRecovery("Errore apertura /log.csv per download"); return; }
     File tF = SD.open("/log_temp.csv", FILE_WRITE);
     if (!tF) { oF.close(); server.send(500, "text/plain", "Errore apertura /log_temp.csv per scrittura"); triggerSDRecovery("Errore apertura /log_temp.csv per scrittura"); return; }
     uint8_t b[512]; size_t br;
     while ((br=oF.read(b,sizeof(b))) > 0) {
-        if (tF.write(b,br) != br) {  
+        if (tF.write(b,br) != br) {
             oF.close(); tF.close(); SD.remove("/log_temp.csv");
             server.send(500, "text/plain", "Errore scrittura su /log_temp.csv");
             triggerSDRecovery("Errore scrittura /log_temp.csv durante copia"); return;
@@ -906,23 +911,23 @@ void startServer() {
     }
     oF.close(); tF.close();
 
-    if (!SD.remove("/log.csv")) {Serial.println("Errore rimozione /log.csv dopo copia in temp");}  
-    File nLF = SD.open("/log.csv", FILE_WRITE);  
+    if (!SD.remove("/log.csv")) {Serial.println("Errore rimozione /log.csv dopo copia in temp");}
+    File nLF = SD.open("/log.csv", FILE_WRITE);
     if (nLF) {
-        if (!nLF.println("Dispositivo,Timestamp,Tipo,Descrizione,Valore")) {  
+        if (!nLF.println("Dispositivo,Timestamp,Tipo,Descrizione,Valore")) {
              nLF.close(); triggerSDRecovery("Errore scrittura header nuovo /log.csv");
         } else {
             nLF.close();
-            logCount = 0;  
+            logCount = 0;
             Serial.println("[Log] File /log.csv azzerato e header riscritto.");
         }
     } else {
         triggerSDRecovery("Errore ricreazione /log.csv dopo azzeramento");
     }
 
-    File fTS = SD.open("/log_temp.csv", FILE_READ);  
+    File fTS = SD.open("/log_temp.csv", FILE_READ);
     if (fTS) {
-      server.sendHeader("Content-Disposition", "attachment; filename=\"log_downloaded.csv\"");  
+      server.sendHeader("Content-Disposition", "attachment; filename=\"log_downloaded.csv\"");
       server.streamFile(fTS,"text/csv");
       fTS.close();
     }
@@ -931,7 +936,7 @@ void startServer() {
       triggerSDRecovery("Errore apertura /log_temp.csv per stream dopo copia");
     }
   });
-  server.on("/logtemp", HTTP_GET, []() {  
+  server.on("/logtemp", HTTP_GET, []() {
     if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503,"text/plain","SD Card non disponibile."); return; }
     if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
     if (!SD.exists("/log_temp.csv")) { server.send(404,"text/plain","/log_temp.csv non trovato."); return; }
@@ -941,7 +946,7 @@ void startServer() {
     server.streamFile(f,"text/csv");
     f.close();
   });
-  server.on("/del", HTTP_GET, []() {  
+  server.on("/del", HTTP_GET, []() {
     if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503,"text/plain","SD Card non disponibile."); return; }
     if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
     if(SD.exists("/log_temp.csv")){
@@ -964,11 +969,11 @@ void startServer() {
     } else {
         sdStatusString = "Non Inizializzata / Errore";
     }
-    
+
     Serial.printf("[DEBUG WebStatus] Valore di currentSpeedMetersPerMinute prima dell'invio HTML: %.2f\n", currentSpeedMetersPerMinute);
 
     String sP="<html><head><title>Status "+nomeDispositivo+"</title><meta http-equiv='refresh' content='10'><style>body{font-family:Arial,sans-serif;margin:15px;}h1{color:#333;}ul{list-style-type:none;padding:0;}li{background-color:#f9f9f9;border:1px solid #ddd;margin-bottom:8px;padding:10px;border-radius:4px;}li strong{color:#555;} .ota-button{padding:8px 12px;background-color:#007bff;color:white;text-decoration:none;border-radius:4px;border:none;cursor:pointer;font-size:0.9em;margin-left:10px;} .ota-button:hover{background-color:#0056b3;}</style></head><body><h1>Status Dispositivo</h1>";
-    sP += "<p style='margin-bottom:15px;'><a href='/doupdate' class='ota-button'>Verifica/Installa Aggiornamenti Firmware</a></p>"; // Il testo rimane generico
+    sP += "<p style='margin-bottom:15px;'><a href='/doupdate' class='ota-button'>Verifica/Installa Aggiornamenti Firmware</a></p>";
     sP += "<ul>";
     sP+="<li><strong>Dispositivo:</strong> "+nomeDispositivo+" (<a href='/config'>Configura</a>)</li>";
     sP+="<li><strong>Versione Firmware:</strong> " + String(FIRMWARE_VERSION) + "</li>";
@@ -979,8 +984,7 @@ void startServer() {
     sP+="<li><strong>Config. Rete (NVS):</strong> SSID: "+conf_ssid+(conf_use_static_ip?(" | Static IP: "+conf_static_ip.toString()+" | Gateway: "+conf_gateway.toString()+" | Subnet: "+conf_subnet.toString()+" | DNS: "+conf_dns1.toString()):" | Modalità IP: DHCP")+"</li>";
     sP+="<li><strong>Config. Email:</strong> Mittente: "+conf_email_sender+" | Dest. TO: "+conf_email_recipient_to+" | Dest. CC: "+conf_email_recipient_cc_csv+"</li>";
     sP+="<li><strong>Ora di Sistema:</strong> "+getFormattedTimestamp()+(timeSynced?" (Sincronizzata)":" (Non Sincronizzata)")+"</li>";
-    
-    // NUOVA RIGA PER VISUALIZZARE URL OTA CONFIGURATO
+
     sP+="<li><strong>URL Firmware OTA (NVS):</strong> "+(conf_ota_firmware_url.isEmpty() ? "Non impostato" : ("<span title='" + conf_ota_firmware_url + "'>" + (conf_ota_firmware_url.length() > 60 ? conf_ota_firmware_url.substring(0, 57) + "..." : conf_ota_firmware_url) + "</span>"))+"</li>";
 
     sP+="<li><strong>Pin Monitorati (CSV):</strong> "+conf_monitored_pins_csv+"</li><li><strong>Pin Sensore Velocità:</strong> "+String(active_speed_sensor_pin)+" | <strong>Metri/Impulso:</strong> "+String(active_meters_per_pulse,5)+"</li>";
@@ -989,13 +993,13 @@ void startServer() {
     sP+="<li><strong>Scheda SD:</strong> "+ sdStatusString +"</li>";
     sP+="</ul><hr><p><a href='/file'>Visualizza File su SD</a> | <a href='/log'>Scarica Log & Azzera</a> | <a href='/del'>Cancella Log Temporaneo</a></p></body></html>"; server.send(200,"text/html",sP);
   });
-  server.on("/file", HTTP_GET, []() {  
+  server.on("/file", HTTP_GET, []() {
     if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card non disponibile."); return; }
     if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
     File root = SD.open("/");
-    if (!root || !root.isDirectory()) {  
+    if (!root || !root.isDirectory()) {
         server.send(500, "text/plain", "Errore apertura root SD o non è una directory.");
-        if(root) root.close();  
+        if(root) root.close();
         triggerSDRecovery("Errore apertura root SD per /file");
         return;
     }
@@ -1008,21 +1012,21 @@ void startServer() {
         html += "</td><td>";
         if(!file.isDirectory() && String(file.name()) != "/" ){html += " (<a href='/download?file="+String(file.name())+"'>Download</a>)";}
         html += "</td></tr>";
-        file.close();  
+        file.close();
         file=root.openNextFile();
     }
     root.close(); html += "</table><br><a href='/status'>Torna allo Stato</a></body></html>"; server.send(200, "text/html", html);
   });
-  server.on("/download", HTTP_GET, []() {  
+  server.on("/download", HTTP_GET, []() {
     if (!sdCardInitialized && !sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card non disponibile."); return; }
     if (!sdCardInitialized && sdRecoveryAttemptInProgress) { server.send(503, "text/plain", "SD Card in recupero, riprovare tra poco."); return; }
     if (!server.hasArg("file")) { server.send(400, "text/plain", "Parametro 'file' mancante"); return; }
-    String filename=server.arg("file"); if(!filename.startsWith("/")) filename="/"+filename;  
+    String filename=server.arg("file"); if(!filename.startsWith("/")) filename="/"+filename;
     if(!SD.exists(filename)){ server.send(404,"text/plain","File non trovato: " + filename); return; }
     File f=SD.open(filename,FILE_READ);
     if(f){
-        server.sendHeader("Content-Disposition","attachment; filename=\""+filename.substring(filename.lastIndexOf('/')+1)+"\"");  
-        server.streamFile(f,"application/octet-stream");  
+        server.sendHeader("Content-Disposition","attachment; filename=\""+filename.substring(filename.lastIndexOf('/')+1)+"\"");
+        server.streamFile(f,"application/octet-stream");
         f.close();
     }
     else {
@@ -1035,36 +1039,36 @@ void startServer() {
 
 // === Funzione di Polling e Logging degli Input ===
 void pollInputsAndLog() {
-  if (sdRecoveryAttemptInProgress) return;  
-  if (monitoredPinsVec.empty()) return;  
+  if (sdRecoveryAttemptInProgress) return;
+  if (monitoredPinsVec.empty()) return;
 
   for (size_t i = 0; i < monitoredPinsVec.size(); ++i) {
-    int pin = monitoredPinsVec[i]; if (pin < 0 || pin >= GPIO_NUM_MAX) continue;  
+    int pin = monitoredPinsVec[i]; if (pin < 0 || pin >= GPIO_NUM_MAX) continue;
     bool currentState = digitalRead(pin);
-    if (currentState != lastPinStatesVec[i]) {  
-      if (millis() - lastDebounceTimeVec[i] > debounceDelay) {  
+    if (currentState != lastPinStatesVec[i]) {
+      if (millis() - lastDebounceTimeVec[i] > debounceDelay) {
         lastPinStatesVec[i] = currentState; String timestamp = getFormattedTimestamp();
         char pinDesc[10]; snprintf(pinDesc, sizeof(pinDesc), "IN%d", pin);
-        if (sdCardInitialized) {  
+        if (sdCardInitialized) {
           File f = SD.open("/log.csv", FILE_APPEND);
-          if (f) {  
+          if (f) {
             if (!f.printf("%s,%s,IO,%s,%d\n", nomeDispositivo.c_str(), timestamp.c_str(), pinDesc, currentState)) {
                 Serial.printf("[Poll] Errore scrittura su SD (printf). Log: %s,%s,IO,%s,%d\n",nomeDispositivo.c_str(),timestamp.c_str(),pinDesc,currentState);
                 triggerSDRecovery("Err scrittura CSV (polling IO)");
             }
-            f.close();  
+            f.close();
             logCount++;
           }
-          else {  
+          else {
             Serial.printf("[Poll] Errore apertura SD per scrittura. Log: %s,%s,IO,%s,%d\n",nomeDispositivo.c_str(),timestamp.c_str(),pinDesc,currentState);
             triggerSDRecovery("Err apertura CSV (polling IO)");
           }
-        } else {  
-            Serial.printf("LOG SERIAL(NoSD):%s,%s,IO,%s,%d\n",nomeDispositivo.c_str(),timestamp.c_str(),pinDesc,currentState);  
+        } else {
+            Serial.printf("LOG SERIAL(NoSD):%s,%s,IO,%s,%d\n",nomeDispositivo.c_str(),timestamp.c_str(),pinDesc,currentState);
             if(!sdRecoveryAttemptInProgress) triggerSDRecovery("SD non inizializzata durante polling IO");
         }
       }
-      lastDebounceTimeVec[i] = millis();  
+      lastDebounceTimeVec[i] = millis();
     }
   }
 }
@@ -1072,15 +1076,15 @@ void pollInputsAndLog() {
 // === Funzione di gestione Retry SD ===
 void handleSDRetryLogic() {
     if (sdRecoveryAttemptInProgress && millis() >= nextSDRetryTime) {
-        bool currentAttemptSuccess = false;  
+        bool currentAttemptSuccess = false;
 
         if (sdRetryCount < MAX_SD_RETRIES) {
-            sdRetryCount++;  
+            sdRetryCount++;
             Serial.printf("[SD Recovery] Tentativo %d/%d (Contesto: %s)...\n", sdRetryCount, MAX_SD_RETRIES, lastSDFailureContext.c_str());
-            
-            if (SD.begin(SD_CS, spiSD, 8000000)) {  
+
+            if (SD.begin(SD_CS, spiSD, 8000000)) {
                 Serial.println("[SD Recovery] SD.begin() OK. Verifico operatività file di log...");
-                bool logFileOperational = true;  
+                bool logFileOperational = true;
 
                 if (!SD.exists("/log.csv")) {
                     Serial.print("[SD Recovery] /log.csv non trovato. Creazione... ");
@@ -1097,7 +1101,7 @@ void handleSDRetryLogic() {
                         Serial.println("[SD Recovery] Errore apertura /log.csv per creazione.");
                         logFileOperational = false;
                     }
-                } else {  
+                } else {
                     File f_test = SD.open("/log.csv", FILE_APPEND);
                     if (f_test) {
                         Serial.println("[SD Recovery] Apertura /log.csv in append OK.");
@@ -1109,31 +1113,31 @@ void handleSDRetryLogic() {
                 }
 
                 if (logFileOperational) {
-                    currentAttemptSuccess = true;  
+                    currentAttemptSuccess = true;
                 } else {
                     Serial.println("[SD Recovery] SD.begin() OK, ma problemi con file di log.");
                 }
-            } else {  
+            } else {
                 Serial.println("[SD Recovery] SD.begin() fallito durante il tentativo.");
             }
 
             if (currentAttemptSuccess) {
                 Serial.println("[SD Recovery] Tentativo di recupero SD riuscito!");
-                sdCardInitialized = true;        
-                sdRecoveryAttemptInProgress = false;  
-                sdRetryCount = 0;            
-                emailAlertSentForSDFailure = false;  
-            } else {  
+                sdCardInitialized = true;
+                sdRecoveryAttemptInProgress = false;
+                sdRetryCount = 0;
+                emailAlertSentForSDFailure = false;
+            } else {
                 Serial.printf("[SD Recovery] Tentativo %d non riuscito.\n", sdRetryCount);
-                sdCardInitialized = false;  
+                sdCardInitialized = false;
                 if (sdRetryCount >= MAX_SD_RETRIES) {
                     Serial.println("[SD Recovery] Tutti i " + String(MAX_SD_RETRIES) + " tentativi di recupero SD esauriti. Invio email di errore.");
-                    sdRecoveryAttemptInProgress = false;  
-                    if (!emailAlertSentForSDFailure) {  
+                    sdRecoveryAttemptInProgress = false;
+                    if (!emailAlertSentForSDFailure) {
                         sendSDFailureEmail("Recupero SD fallito dopo " + String(MAX_SD_RETRIES) + " tentativi. Ultimo contesto: " + lastSDFailureContext);
                     }
                 } else {
-                    nextSDRetryTime = millis() + SD_RETRY_INTERVAL;  
+                    nextSDRetryTime = millis() + SD_RETRY_INTERVAL;
                 }
             }
         }
